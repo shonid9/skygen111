@@ -1,6 +1,6 @@
 {
   "name": "emet-one",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "EMET ONE verification intelligence SaaS",
   "main": "server.js",
@@ -8,9 +8,10 @@
     "start": "node server.js"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "dependencies": {
+    "@contentauth/c2pa-node": "^0.9.4",
     "adm-zip": "^0.5.16",
     "exifreader": "^4.26.2",
     "express": "^4.21.2",
