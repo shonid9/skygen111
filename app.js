@@ -43,15 +43,149 @@
   panel?.querySelectorAll('a').forEach(a => a.addEventListener('click', () => setMenu(false)));
   addEventListener('resize', () => { if (innerWidth > 760) setMenu(false); });
 
-  // Cursor magnifier, subtle on desktop only
-  const probe = document.querySelector('.probe');
-  if (fine && probe) {
-    addEventListener('mousemove', e => { probe.style.left=e.clientX+'px'; probe.style.top=e.clientY+'px'; probe.classList.add('on'); });
-    addEventListener('mouseleave',()=>probe.classList.remove('on'));
-    document.querySelectorAll('a,.btn,.card,.chip,.row,.integration,.flowStep').forEach(el=>{
-      el.addEventListener('mouseenter',()=>probe.classList.add('big'));
-      el.addEventListener('mouseleave',()=>probe.classList.remove('big'));
-    });
+  // Data-driven polish: active nav link, reading progress, row status colours, hidden token layers
+  const path = location.pathname.replace(/\/$/, '') || '/index.html';
+  document.querySelectorAll('.links a,.mobilePanel a').forEach(a => {
+    const href = a.getAttribute('href');
+    if (href === path || (path === '/' && href === '/index.html')) a.setAttribute('aria-current', 'page');
+  });
+  const progress = document.createElement('i');
+  progress.className = 'e1-progress';
+  document.body.appendChild(progress);
+  const paint = () => {
+    const max = document.documentElement.scrollHeight - innerHeight;
+    progress.style.transform = `scaleX(${max > 0 ? Math.min(1, scrollY / max) : 0})`;
+  };
+  addEventListener('scroll', paint, {passive:true}); addEventListener('resize', paint); paint();
+  document.querySelectorAll('.row').forEach(r => {
+    const s = (r.querySelector('span:last-child')?.textContent || '').trim().toLowerCase();
+    const status = ['confirmed','matched','conflict','review','unknown'].find(k => s.includes(k));
+    if (status) r.dataset.status = status === 'matched' ? 'confirmed' : status;
+  });
+  document.querySelectorAll('.xray[data-tokens]').forEach(layer => {
+    const words = layer.dataset.tokens.split('|');
+    const frag = document.createElement('div'); frag.className = 'tokens';
+    for (let i = 0; i < 160; i++) { const s = document.createElement('span'); s.textContent = words[i % words.length]; frag.appendChild(s); }
+    layer.appendChild(frag);
+  });
+
+  // Section-aware cursor. Each zone declares data-cursor: lens | inspect | scan | link | verdict | ledger | xray
+  const xrays = [...document.querySelectorAll('.xray')];
+  const setXray = (layer, cx, cy) => {
+    const r = layer.getBoundingClientRect();
+    layer.style.setProperty('--x', `${cx - r.left}px`);
+    layer.style.setProperty('--y', `${cy - r.top}px`);
+  };
+  const hideXray = layer => { layer.style.setProperty('--x', '-999px'); layer.style.setProperty('--y', '-999px'); };
+
+  if (fine && !reduced) {
+    document.documentElement.classList.add('e1-cur');
+    const cur = document.createElement('div');
+    cur.className = 'e1-cursor';
+    cur.setAttribute('aria-hidden', 'true');
+    cur.innerHTML = '<i class="cx"></i><i class="cy"></i><div class="c-ring"><i class="c-orb"></i><i class="c-orb"></i><i class="c-orb"></i></div><div class="c-lens"><div class="c-glass"></div></div><i class="c-handle"></i><div class="c-label"></div>';
+    const dot = document.createElement('i');
+    dot.className = 'e1-dot';
+    document.body.append(cur, dot);
+    const lens = cur.querySelector('.c-lens');
+    const label = cur.querySelector('.c-label');
+    const MODES = ['lens','inspect','scan','link','verdict','ledger','xray'];
+    const SCALE = 1.7;
+
+    let tx = innerWidth / 2, ty = innerHeight / 2, x = tx, y = ty, shown = false;
+    let mode = '', hov = null, zone = null, magSrc = null, magClone = null, ledgerTimer = 0;
+
+    const pad = n => String(Math.max(0, Math.round(n))).padStart(4, '0');
+    const say = (text, status) => {
+      label.className = 'c-label' + (text ? ' show' : '') + (status ? ' s-' + status : '');
+      if (text) label.textContent = text;
+    };
+    const setMode = m => {
+      if (m === mode) return;
+      MODES.forEach(k => { cur.classList.toggle('m-' + k, k === m); dot.classList.toggle('m-' + k, k === m); });
+      mode = m; hov = undefined; say('');
+    };
+    const setMag = src => {
+      if (src === magSrc) return;
+      magSrc = src;
+      if (magClone) { magClone.remove(); magClone = null; }
+      cur.classList.toggle('mag', !!src);
+      if (!src) return;
+      const cs = getComputedStyle(src);
+      magClone = document.createElement('div');
+      magClone.className = 'c-lensClone';
+      magClone.innerHTML = src.innerHTML;
+      magClone.style.cssText = `width:${src.getBoundingClientRect().width}px;font:${cs.fontWeight} ${cs.fontSize}/${cs.lineHeight} ${cs.fontFamily};letter-spacing:${cs.letterSpacing};text-align:${cs.textAlign};text-transform:${cs.textTransform}`;
+      lens.prepend(magClone);
+    };
+    const ledger = () => {
+      clearInterval(ledgerTimer);
+      let n = 0;
+      ledgerTimer = setInterval(() => {
+        n++;
+        if (n > 9) { clearInterval(ledgerTimer); say('Σ MATCH ✓', 'confirmed'); return; }
+        say('Σ ' + (Math.random() * 9000 + 100).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ','));
+      }, 70);
+    };
+
+    const route = e => {
+      const t = e.target instanceof Element ? e.target : document.body;
+      const mag = t.closest('[data-magnify]');
+      const z = t.closest('[data-cursor]');
+      const m = mag ? 'lens' : (z?.dataset.cursor || '');
+      if (z !== zone) { if (zone) zone.querySelectorAll('.xray').forEach(hideXray); zone = z; }
+      setMode(m);
+      setMag(m === 'lens' ? mag : null);
+      cur.classList.toggle('wide', !!t.closest('.visual'));
+      const h = t.closest('a,button,.card,.row,.integration,.flowStep,.chip,.panel');
+      if (h !== hov) {
+        hov = h; cur.classList.toggle('hov', !!h);
+        if (m === 'inspect') say(h?.matches('.card') ? (h.matches('a') ? 'OPEN CASE ↗' : 'INSPECT') : h ? 'OPEN ↗' : '');
+        else if (m === 'link') say(h?.matches('.integration') ? 'LINK SOURCE' : 'CONNECT');
+        else if (m === 'verdict') { const s = h?.dataset.status; say(s ? s : h ? 'EVIDENCE' : 'REVIEW', s); }
+        else if (m === 'ledger') { if (h?.matches('.card')) ledger(); else { clearInterval(ledgerTimer); say('Σ RECALC'); } }
+        else if (m === 'xray') say(h ? 'OPEN ↗' : '');
+        else if (m === 'lens') say('');
+        else say(h ? 'OPEN ↗' : '');
+      }
+      if (m === 'scan') say(`X ${pad(e.clientX)} · Y ${pad(e.clientY)}${h?.matches('.flowStep') ? ' · STEP ' + (h.querySelector('b')?.textContent || '') : ''}`);
+    };
+
+    addEventListener('mousemove', e => {
+      tx = e.clientX; ty = e.clientY;
+      dot.style.transform = `translate3d(${tx}px,${ty}px,0)`;
+      if (!shown) { x = tx; y = ty; shown = true; cur.classList.add('on'); dot.classList.add('on'); }
+      route(e);
+    }, {passive:true});
+    document.addEventListener('mouseleave', () => { shown = false; cur.classList.remove('on'); dot.classList.remove('on'); });
+    addEventListener('mousedown', () => cur.classList.add('down'));
+    addEventListener('mouseup', () => cur.classList.remove('down'));
+    addEventListener('scroll', () => { if (magSrc) setMag(null); }, {passive:true});
+
+    (function loop() {
+      x += (tx - x) * .24; y += (ty - y) * .24;
+      cur.style.transform = `translate3d(${x}px,${y}px,0)`;
+      if (zone && (mode === 'lens' || mode === 'xray')) zone.querySelectorAll('.xray').forEach(l => setXray(l, x, y));
+      if (magClone && magSrc) {
+        const r = magSrc.getBoundingClientRect();
+        const L = lens.offsetWidth / 2;
+        magClone.style.transform = `translate(${L - (x - r.left) * SCALE}px,${L - (y - r.top) * SCALE}px) scale(${SCALE})`;
+      }
+      requestAnimationFrame(loop);
+    })();
+  } else if (!reduced && xrays.length) {
+    // Touch devices get a slow drifting reveal so the hidden evidence layers are still discoverable.
+    const live = new Set();
+    const io = new IntersectionObserver(es => es.forEach(e => e.isIntersecting ? live.add(e.target) : live.delete(e.target)));
+    xrays.forEach(l => { l.style.setProperty('--r', '170px'); io.observe(l); });
+    (function drift(t) {
+      live.forEach(l => {
+        const w = l.offsetWidth, h = l.offsetHeight, k = t / 1000;
+        l.style.setProperty('--x', `${w / 2 + Math.sin(k * .6) * w * .38}px`);
+        l.style.setProperty('--y', `${h / 2 + Math.cos(k * .45) * h * .32}px`);
+      });
+      requestAnimationFrame(drift);
+    })(0);
   }
 
   // Short page transition for internal navigation. Feels premium without slowing the site.
