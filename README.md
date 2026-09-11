@@ -21,11 +21,15 @@ https://website-production-ceb1.up.railway.app/
 - `styles.css` — responsive design system, menu, loading screen, section cursors, hidden evidence layers and interaction styles
 - `app.js` — navigation, loading transitions, mobile behavior, reading progress and the section-aware cursor engine
 
+## Interaction layer
+
+Every page boots through a short verification loader (counter, log lines, module name from `data-module`, curtain wipe). Each hero carries an interactive scene declared with `data-visual`: `graph` (fraud story graph), `console` (intake log), `receipt` (live recalculation), `pages` (annotated contract), `orbit` (source mesh), `pipeline` (files flowing through the four stages). Headlines split into words and animate in, buttons are magnetic, mono labels decode on hover, cards tilt in 3D, the home pipeline section is pinned and scrubbed by scroll, and a ticker strip runs under every hero.
+
 ## Section cursors
 
 On desktop the native cursor is replaced by one cursor that changes personality per zone (`data-cursor` on the zone element):
 
-- `lens` — a loupe that really magnifies the headline underneath (`data-magnify`) and reveals the annotated document in the hero visual
+- `lens` — an inverting disc over the heroes, and a glass loupe that reveals the annotated document in the home visual
 - `inspect` — a dashed selection box with an OPEN CASE / INSPECT label on the case cards
 - `scan` — crosshair with live X / Y readout on the process steps
 - `link` — orbiting source nodes on the integrations grid
