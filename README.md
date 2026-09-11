@@ -23,6 +23,8 @@ https://website-production-ceb1.up.railway.app/
 
 ## Interaction layer
 
+The desktop cursor is pixel-exact: position is written on the pointer event itself, with no smoothing and no full-screen blend layers, so it never trails. Over a hero, it becomes a thin lime ring exactly the size of the circle the hidden layer opens.
+
 Every page boots through a short verification loader (counter, page-specific log lines from `data-boot`, module name from `data-module`, curtain wipe). Each hero carries a live scene declared with `data-visual` (`graph`, `console`, `receipt`, `pages`, `orbit`, `pipeline`) and a hidden X-ray layer generated from `data-xray` / `data-faces`: the con behind the copy, revealed under the cursor. The fraud stage also runs a WebGL domain-warp field (`data-gl`).
 
 Reusable sections, all vanilla: `.hscroll` (scroll-pinned horizontal gallery), `.stackSec` (sticky stacking cards), `.redlineSec` (scroll-scrubbed tracked changes), `.compare` (drag slider), `.planner` (interactive case builder), `.prox` (proximity-lit tiles with a cable cursor), `.switch` (permission toggle via `:has()`), `.gauge` (confidence arc that stops at 87), `.dict` (hover-decoded phrases), `.flags`, `.faqs` (`::details-content` transitions), `.scrollText` (scroll-lit manifesto), `.bigMarquee`, `.stats` counters. Page navigation uses cross-document View Transitions where supported.
