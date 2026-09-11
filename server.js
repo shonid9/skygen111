@@ -2,6 +2,7 @@ const express = require('express');
 const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
+const Stripe = require('stripe');
 const { analyzeFile, analyzeTextInput } = require('./analyzer');
 
 const app = express();
@@ -25,12 +26,15 @@ const plans = [
   {id:'pro',name:'Pro',price:49,period:'month',scans:300,maxMb:50,features:['300 scans each month','Advanced provenance and contradiction signals','Batch comparison','Priority processing']},
   {id:'business',name:'Business',price:149,period:'month',scans:2000,maxMb:100,features:['2,000 scans each month','Team workspace','API access','Connected evidence sources','Audit export']}
 ];
+const priceIds = {lite:process.env.STRIPE_PRICE_LITE,pro:process.env.STRIPE_PRICE_PRO,business:process.env.STRIPE_PRICE_BUSINESS};
 
 app.get('/api/health',(req,res)=>res.json({ok:true,service:'emet-one',version:'0.2.0'}));
 app.get('/api/plans',(req,res)=>res.json({currency:'USD',plans}));
 app.get('/api/config',(req,res)=>res.json({
   googleAuthConfigured:Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_PUBLISHABLE_KEY),
-  billingConfigured:Boolean(process.env.STRIPE_SECRET_KEY),
+  supabaseUrl:process.env.SUPABASE_URL||null,
+  supabasePublishableKey:process.env.SUPABASE_PUBLISHABLE_KEY||null,
+  billingConfigured:Boolean(process.env.STRIPE_SECRET_KEY && Object.values(priceIds).some(Boolean)),
   freeScans:1,
   maxUploadMb:15
 }));
@@ -45,6 +49,19 @@ app.post('/api/analyze-text', rate, async (req,res)=>{
   const text=String(req.body?.text||'').trim(); if(text.length<30) return res.status(400).json({error:'Paste at least 30 characters.'});
   if(text.length>250000) return res.status(413).json({error:'Text sample is too large for the demo.'});
   res.json(analyzeTextInput(text));
+});
+app.post('/api/create-checkout-session', async (req,res)=>{
+  try{
+    const plan=String(req.body?.plan||'').toLowerCase(); const price=priceIds[plan];
+    if(!['lite','pro','business'].includes(plan)) return res.status(400).json({error:'Unknown plan.'});
+    if(!process.env.STRIPE_SECRET_KEY || !price) return res.status(503).json({error:'Billing is not connected yet.'});
+    const stripe=new Stripe(process.env.STRIPE_SECRET_KEY);
+    const base=`${req.headers['x-forwarded-proto']||req.protocol}://${req.get('host')}`;
+    const params={mode:'subscription',line_items:[{price,quantity:1}],success_url:`${base}/account.html?checkout=success&session_id={CHECKOUT_SESSION_ID}`,cancel_url:`${base}/pricing.html?checkout=cancelled`,allow_promotion_codes:true};
+    const email=String(req.body?.email||'').trim(); if(/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) params.customer_email=email;
+    const userId=String(req.body?.userId||'').trim(); if(userId) params.client_reference_id=userId.slice(0,200);
+    const session=await stripe.checkout.sessions.create(params); res.json({url:session.url});
+  }catch(e){ console.error(e); res.status(500).json({error:'Could not open checkout.',detail:e.message}); }
 });
 
 function htmlFor(file){
