@@ -109,13 +109,14 @@
     const rand = seeded(page.length * 977 + host.dataset.xray.length);
     const phrases = host.dataset.xray.split('|');
     const faces = +(host.dataset.faces || 0);
-    let html = '';
-    phrases.forEach((p, i) => {
-      const big = i % 4 === 0;
-      html += `<span class="xp ${big ? 'big' : ''}" style="left:${rand() * 88}%;top:${6 + rand() * 82}%;--rot:${(rand() - .5) * 18}deg;--d:${(rand() * 3).toFixed(2)}s">${p}</span>`;
-    });
-    for (let i = 0; i < faces; i++) html += `<i class="xf" style="left:${rand() * 90}%;top:${rand() * 80}%;--s:${(.6 + rand() * .9).toFixed(2)};--rot:${(rand() - .5) * 40}deg;--d:${(rand() * 4).toFixed(2)}s">${ICON.face}</i>`;
-    html += `<b class="xtag">${host.dataset.xtag || 'UNDER THE SURFACE'}</b>`;
+    let html = '<div class="xgrid">';
+    for (let i = 0; i < 190; i++) {
+      const p = phrases[i % phrases.length];
+      const big = i % 16 === 5;
+      html += `<span class="xp${big ? ' big' : ''}" style="--rot:${((rand() - .5) * 6).toFixed(1)}deg;--d:${(rand() * 3).toFixed(2)}s">${p}</span>`;
+      if (faces && i % Math.ceil(190 / faces) === 3) html += `<i class="xf" style="--rot:${((rand() - .5) * 30).toFixed(0)}deg;--d:${(rand() * 4).toFixed(2)}s">${ICON.face}</i>`;
+    }
+    html += `</div><b class="xtag">${host.dataset.xtag || 'UNDER THE SURFACE'}</b>`;
     layer.innerHTML = html; host.appendChild(layer);
   });
   document.querySelectorAll('.xray[data-tokens]').forEach(layer => {
@@ -227,7 +228,7 @@
       b.addEventListener('mousemove', e => { const r = b.getBoundingClientRect(); b.style.transform = `translate(${(e.clientX - r.left - r.width / 2) * .3}px,${(e.clientY - r.top - r.height / 2) * .4}px)`; });
       b.addEventListener('mouseleave', () => b.style.transform = '');
     });
-    document.querySelectorAll('.eyebrow,.card .mono,.chip,.foot span,.stageTag,.flowStep b,.flag b').forEach(el => { const src = el.textContent; el.addEventListener('mouseenter', () => scramble(el, src)); });
+    document.querySelectorAll('.eyebrow,.card .mono,.chip,.foot span,.stageTag,.flowStep b,.flags .flag b').forEach(el => { const src = el.textContent; el.addEventListener('mouseenter', () => scramble(el, src)); });
     document.querySelectorAll('.dict .say').forEach(row => { const mean = row.parentElement.querySelector('.mean'), src = mean.textContent; row.parentElement.addEventListener('mouseenter', () => scramble(mean, src, 22)); });
     document.querySelectorAll('.tilt').forEach(el => {
       el.addEventListener('mousemove', e => { const r = el.getBoundingClientRect(), px = (e.clientX - r.left) / r.width, py = (e.clientY - r.top) / r.height; el.style.setProperty('--rx', `${(py - .5) * -8}deg`); el.style.setProperty('--ry', `${(px - .5) * 10}deg`); el.style.setProperty('--gx', `${px * 100}%`); el.style.setProperty('--gy', `${py * 100}%`); });
@@ -346,7 +347,7 @@
       const el = document.createElement('div'); el.className = 'receipt'; host.appendChild(el);
       const items = [['Coffee beans 1kg', 42.00], ['Grinder service', 120.00], ['Delivery', 18.00], ['Filters ×3', 24.00]];
       const sub = items.reduce((a, b) => a + b[1], 0), tax = +(sub * .17).toFixed(2), real = +(sub + tax).toFixed(2), fake = real + 36;
-      const money = n => n.toLocaleString('en-US', {minimumFractionDigits: 2});
+      const money = n => n.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
       el.innerHTML = `<div class="rHead"><b>NORTH ROAST LTD</b><span>INV-20418 · 03.04.2026</span></div>${items.map(i => `<div class="rRow"><span>${i[0]}</span><span>${money(i[1])}</span></div>`).join('')}<div class="rRow sub"><span>Subtotal</span><span>${money(sub)}</span></div><div class="rRow"><span>VAT 17%</span><span>${money(tax)}</span></div><div class="rRow total"><span>TOTAL</span><span class="rTotal">${money(fake)}</span></div><div class="rScan"></div><div class="rStamp">RECALCULATED ✓</div><div class="rFlag">+36.00 FROM NOWHERE</div>`;
       const total = el.querySelector('.rTotal'); if (reduced) { total.textContent = money(real); el.classList.add('done'); return; }
       const cycle = () => { el.classList.remove('done', 'scan', 'flag'); total.textContent = money(fake); setTimeout(() => el.classList.add('scan'), 500); setTimeout(() => el.classList.add('flag'), 1500); setTimeout(() => { let n = 0; const iv = setInterval(() => { n++; total.textContent = n < 12 ? money(rnd(real - 40, real + 40)) : money(real); if (n >= 12) { clearInterval(iv); el.classList.add('done'); } }, 55); }, 2300); setTimeout(cycle, 5600); };
@@ -373,12 +374,11 @@
     const cur = document.createElement('div'); cur.className = 'e1-cursor'; cur.setAttribute('aria-hidden', 'true');
     cur.innerHTML = '<i class="cx"></i><i class="cy"></i><div class="c-ring"><i class="c-orb"></i><i class="c-orb"></i><i class="c-orb"></i></div><div class="c-lens"><div class="c-glass"></div></div><i class="c-handle"></i><i class="c-icon"></i><div class="c-label"></div>';
     const dot = document.createElement('i'); dot.className = 'e1-dot';
-    const blend = document.createElement('i'); blend.className = 'e1-blend';
     const cable = document.createElement('canvas'); cable.className = 'e1-cable';
-    body.append(cur, dot, blend, cable);
+    body.append(cur, dot, cable);
     const label = cur.querySelector('.c-label'), icon = cur.querySelector('.c-icon');
     const MODES = ['lens', 'inspect', 'scan', 'link', 'verdict', 'ledger', 'xray', 'mask', 'stamp', 'tape', 'probe', 'plug'];
-    let tx = innerWidth / 2, ty = innerHeight / 2, x = tx, y = ty, shown = false, mode = '', hov = null, zone = null, timer = 0, stampN = 0;
+    let tx = innerWidth / 2, ty = innerHeight / 2, x = tx, y = ty, shown = false, mode = '', hov = null, zone = null, rvZone = null, timer = 0, stampN = 0;
     const pad = n => String(Math.max(0, Math.round(n))).padStart(4, '0');
     const say = (text, status) => { label.className = 'c-label' + (text ? ' show' : '') + (status ? ' s-' + status : ''); if (text) label.textContent = text; };
     const setMode = m => {
@@ -397,16 +397,18 @@
       const m = z?.dataset.cursor || '';
       if (z !== zone) { if (zone) zone.querySelectorAll('.xray').forEach(hideXray); zone = z; }
       setMode(m);
-      const wide = !!t.closest('.visual'); cur.classList.toggle('wide', wide);
-      blend.classList.toggle('on', m === 'lens' && !wide && shown);
-      const h = t.closest('a,button,.card,.row,.integration,.flowStep,.chip,.panel,.stage,.tile,.hsCard,.dictRow,.flag,.stackCard,.exhibit,.faq summary');
+      cur.classList.toggle('wide', !!t.closest('.visual'));
+      const rz = t.closest('[data-xray]');
+      if (rz !== rvZone) { if (rvZone) rvZone.querySelectorAll('.heroX').forEach(hideXray); rvZone = rz; }
+      cur.classList.toggle('rv', !!rz);
+      const h = t.closest('a,button,.card,.row,.integration,.flowStep,.chip,.panel,.stage,.tile,.hsCard,.dictRow,.flags .flag,.stackCard,.exhibit,.faq summary');
       if (h !== hov) {
-        hov = h; cur.classList.toggle('hov', !!h); blend.classList.toggle('hov', !!h);
+        hov = h; cur.classList.toggle('hov', !!h);
         if (m === 'inspect') say(h?.matches('.card') ? (h.matches('a') ? 'OPEN CASE ↗' : 'INSPECT') : h ? 'OPEN ↗' : '');
         else if (m === 'link' || m === 'plug') say(h?.matches('.integration,.tile') ? 'LINK SOURCE' : h ? 'OPEN ↗' : 'CONNECT');
         else if (m === 'verdict') { const s = h?.dataset.status; say(s ? s : h ? 'EVIDENCE' : 'REVIEW', s); }
         else if (m === 'ledger') { if (h?.matches('.card')) ledger(); else { clearInterval(timer); say('Σ RECALC'); } }
-        else if (m === 'mask') say(h ? (h.matches('.stage') ? 'PUSH THE NODES' : h.matches('.dictRow') ? 'DECODE' : h.matches('.hsCard,.flag,.stackCard') ? 'SUSPECT' : 'OPEN ↗') : 'TRUST ME');
+        else if (m === 'mask') say(h ? (h.matches('.stage') ? 'PUSH THE NODES' : h.matches('.dictRow') ? 'DECODE' : h.matches('.hsCard,.flags .flag,.stackCard') ? 'SUSPECT' : 'OPEN ↗') : 'TRUST ME');
         else if (m === 'stamp') say(h ? (h.matches('.exhibit') ? 'CLICK TO STAMP' : 'OPEN ↗') : 'STAMP IT');
         else if (m === 'tape') say(h ? (h.matches('.card') ? 'RECOUNT' : 'OPEN ↗') : '');
         else if (m === 'probe') say(h ? (h.matches('.chipBtn') ? 'ADD TO CASE' : 'OPEN ↗') : 'SCANNING…');
@@ -416,10 +418,17 @@
       if (m === 'scan') say(`X ${pad(e.clientX)} · Y ${pad(e.clientY)}${h?.matches('.flowStep,.stackCard') ? ' · STEP ' + (h.querySelector('b')?.textContent || '') : ''}`);
       if (m === 'tape' && !hov && performance.now() - tapeT > 140) { tapeT = performance.now(); say(tapeLines[tapeN++ % tapeLines.length]); }
     };
-    addEventListener('mousemove', e => { tx = e.clientX; ty = e.clientY; dot.style.transform = `translate3d(${tx}px,${ty}px,0)`; if (!shown) { x = tx; y = ty; shown = true; cur.classList.add('on'); dot.classList.add('on'); } route(e); }, {passive: true});
-    document.addEventListener('mouseleave', () => { shown = false; cur.classList.remove('on'); dot.classList.remove('on'); blend.classList.remove('on'); });
-    addEventListener('mousedown', () => { cur.classList.add('down'); blend.classList.add('down'); });
-    addEventListener('mouseup', () => { cur.classList.remove('down'); blend.classList.remove('down'); });
+    addEventListener('mousemove', e => {
+      tx = e.clientX; ty = e.clientY; x = tx; y = ty;
+      dot.style.transform = `translate3d(${tx}px,${ty}px,0)`; cur.style.transform = `translate3d(${tx}px,${ty}px,0)`;
+      if (!shown) { shown = true; cur.classList.add('on'); dot.classList.add('on'); }
+      route(e);
+      if (zone) zone.querySelectorAll('.xray').forEach(l => setXray(l, tx, ty));
+      if (rvZone) rvZone.querySelectorAll('.heroX').forEach(l => setXray(l, tx, ty));
+    }, {passive: true});
+    document.addEventListener('mouseleave', () => { shown = false; cur.classList.remove('on'); dot.classList.remove('on'); });
+    addEventListener('mousedown', () => cur.classList.add('down'));
+    addEventListener('mouseup', () => cur.classList.remove('down'));
     // Stamp mode: clicking an exhibit leaves a mark.
     addEventListener('click', e => {
       if (mode !== 'stamp') return; const ex = e.target.closest('.exhibit,.stampable'); if (!ex) return;
@@ -429,10 +438,8 @@
     // Plug mode: a cable from the cursor to the nearest tile.
     const cctx = cable.getContext('2d');
     const sizeCable = () => { cable.width = innerWidth; cable.height = innerHeight; }; sizeCable(); addEventListener('resize', sizeCable);
+    addEventListener('scroll', () => { if (zone) zone.querySelectorAll('.xray').forEach(l => setXray(l, tx, ty)); if (rvZone) rvZone.querySelectorAll('.heroX').forEach(l => setXray(l, tx, ty)); }, {passive: true});
     (function loop() {
-      x = lerp(x, tx, .55); y = lerp(y, ty, .55);
-      cur.style.transform = `translate3d(${x}px,${y}px,0)`; blend.style.transform = `translate3d(${x}px,${y}px,0) translate(-50%,-50%)`;
-      if (zone) zone.querySelectorAll('.xray').forEach(l => setXray(l, x, y));
       if (mode === 'plug') {
         cctx.clearRect(0, 0, cable.width, cable.height); let best = null, bd = 260;
         prox.forEach(t => { const r = t.getBoundingClientRect(); const cx = r.left + r.width / 2, cy = r.top + r.height / 2, d = Math.hypot(cx - x, cy - y); if (d < bd) { bd = d; best = {cx, cy}; } });
