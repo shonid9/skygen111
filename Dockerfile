@@ -1,5 +1,4 @@
 FROM nginx:alpine
 COPY index.html /usr/share/nginx/html/index.html
-EXPOSE 80
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 CMD wget -qO- http://127.0.0.1/ >/dev/null || exit 1
-CMD ["nginx", "-g", "daemon off;"]
+EXPOSE 8080
+CMD ["sh", "-c", "sed -i \"s/listen       80;/listen ${PORT:-8080};/\" /etc/nginx/conf.d/default.conf && exec nginx -g 'daemon off;'"]
