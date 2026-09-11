@@ -23,11 +23,22 @@ https://website-production-ceb1.up.railway.app/
 
 ## Interaction layer
 
-Every page boots through a short verification loader (counter, log lines, module name from `data-module`, curtain wipe). Each hero carries an interactive scene declared with `data-visual`: `graph` (fraud story graph), `console` (intake log), `receipt` (live recalculation), `pages` (annotated contract), `orbit` (source mesh), `pipeline` (files flowing through the four stages). Headlines split into words and animate in, buttons are magnetic, mono labels decode on hover, cards tilt in 3D, the home pipeline section is pinned and scrubbed by scroll, and a ticker strip runs under every hero.
+Every page boots through a short verification loader (counter, page-specific log lines from `data-boot`, module name from `data-module`, curtain wipe). Each hero carries a live scene declared with `data-visual` (`graph`, `console`, `receipt`, `pages`, `orbit`, `pipeline`) and a hidden X-ray layer generated from `data-xray` / `data-faces`: the con behind the copy, revealed under the cursor. The fraud stage also runs a WebGL domain-warp field (`data-gl`).
+
+Reusable sections, all vanilla: `.hscroll` (scroll-pinned horizontal gallery), `.stackSec` (sticky stacking cards), `.redlineSec` (scroll-scrubbed tracked changes), `.compare` (drag slider), `.planner` (interactive case builder), `.prox` (proximity-lit tiles with a cable cursor), `.switch` (permission toggle via `:has()`), `.gauge` (confidence arc that stops at 87), `.dict` (hover-decoded phrases), `.flags`, `.faqs` (`::details-content` transitions), `.scrollText` (scroll-lit manifesto), `.bigMarquee`, `.stats` counters. Page navigation uses cross-document View Transitions where supported.
 
 ## Section cursors
 
-On desktop the native cursor is replaced by one cursor that changes personality per zone (`data-cursor` on the zone element):
+On desktop the native cursor is replaced by one cursor with an identity per page (`data-cursor` on `<body>`) that zones can override:
+
+- `mask` (Fraud) — a grinning con-man mask with flickering phrases; `SUSPECT` on cards and flags
+- `stamp` (Legal) — a rubber stamp; clicking an exhibit leaves VERIFIED / DISPUTED marks
+- `tape` (Receipts) — a paper tape that ticks line items as you move
+- `probe` (Verify) — a spinning probe with READING / EXTRACTING / MATCHING states
+- `plug` (Integrations) — a plug that draws a live cable to the nearest source tile
+- `scan` (How it works) — a crosshair with X / Y readout
+
+Zone modes:
 
 - `lens` — an inverting disc over the heroes, and a glass loupe that reveals the annotated document in the home visual
 - `inspect` — a dashed selection box with an OPEN CASE / INSPECT label on the case cards
