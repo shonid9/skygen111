@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const Stripe = require('stripe');
 const { analyzeFile, analyzeTextInput } = require('./analyzer');
+const { analyzeAIFile, analyzeAIText } = require('./ai-engine');
 
 const app = express();
 const PORT = Number(process.env.PORT || 8080);
@@ -28,13 +29,20 @@ const plans = [
 ];
 const priceIds = {lite:process.env.STRIPE_PRICE_LITE,pro:process.env.STRIPE_PRICE_PRO,business:process.env.STRIPE_PRICE_BUSINESS};
 
-app.get('/api/health',(req,res)=>res.json({ok:true,service:'emet-one',version:'0.2.0'}));
+app.get('/api/health',(req,res)=>res.json({ok:true,service:'emet-one',version:'0.3.0',engine:'EMET-AI-2026.09'}));
 app.get('/api/plans',(req,res)=>res.json({currency:'USD',plans}));
 app.get('/api/config',(req,res)=>res.json({
   googleAuthConfigured:Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_PUBLISHABLE_KEY),
   supabaseUrl:process.env.SUPABASE_URL||null,
   supabasePublishableKey:process.env.SUPABASE_PUBLISHABLE_KEY||null,
   billingConfigured:Boolean(process.env.STRIPE_SECRET_KEY && Object.values(priceIds).some(Boolean)),
+  detectionProviders:{
+    c2pa:true,
+    gptzero:Boolean(process.env.GPTZERO_API_KEY),
+    pangram:Boolean(process.env.PANGRAM_API_KEY),
+    copyleaks:Boolean(process.env.COPYLEAKS_EMAIL && process.env.COPYLEAKS_API_KEY),
+    openaiProvenance:Boolean(process.env.OPENAI_API_KEY)
+  },
   freeScans:1,
   maxUploadMb:15
 }));
@@ -42,13 +50,20 @@ app.get('/api/config',(req,res)=>res.json({
 app.post('/api/analyze', rate, upload.single('file'), async (req,res)=>{
   try{
     if(!req.file) return res.status(400).json({error:'Choose a file first.'});
-    const result=await analyzeFile(req.file); res.json(result);
+    const [result, aiAnalysis] = await Promise.all([
+      analyzeFile(req.file),
+      analyzeAIFile(req.file).catch(e=>({version:'EMET-AI-2026.09',final:{verdict:'INCONCLUSIVE',confidence:'low',canProve:false,reason:'The AI/provenance layer could not complete.',evidenceGrade:'engine error'},error:e.message}))
+    ]);
+    res.json({...result,aiAnalysis});
   }catch(e){ console.error(e); res.status(500).json({error:'The file could not be analyzed.',detail:e.message}); }
 });
 app.post('/api/analyze-text', rate, async (req,res)=>{
-  const text=String(req.body?.text||'').trim(); if(text.length<30) return res.status(400).json({error:'Paste at least 30 characters.'});
-  if(text.length>250000) return res.status(413).json({error:'Text sample is too large for the demo.'});
-  res.json(analyzeTextInput(text));
+  try{
+    const text=String(req.body?.text||'').trim(); if(text.length<30) return res.status(400).json({error:'Paste at least 30 characters.'});
+    if(text.length>250000) return res.status(413).json({error:'Text sample is too large for the demo.'});
+    const [base, aiAnalysis]=await Promise.all([Promise.resolve(analyzeTextInput(text)),analyzeAIText(text)]);
+    res.json({...base,aiAnalysis});
+  }catch(e){console.error(e);res.status(500).json({error:'The text could not be analyzed.',detail:e.message});}
 });
 app.post('/api/create-checkout-session', async (req,res)=>{
   try{
