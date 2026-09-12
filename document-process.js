@@ -1,0 +1,46 @@
+'use strict';
+const path=require('node:path');
+const AdmZip=require('adm-zip');
+const VERSION='EMET-PROCESS-2026.09.12.2';
+const clamp=n=>Math.max(0,Math.min(100,Math.round(Number(n)||0)));
+const decode=s=>String(s||'').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&').replace(/&quot;/g,'"').replace(/&apos;/g,"'");
+function tag(xml,name){const m=String(xml||'').match(new RegExp(`<(?:(?:\\w+):)?${name}\\b[^>]*>([\\s\\S]*?)<\\/(?:(?:\\w+):)?${name}>`,'i'));return m?decode(m[1].replace(/<[^>]+>/g,'').trim()):null;}
+function flag(xml,name){return new RegExp(`<w:${name}(?:\\s[^>]*)?\\s*\\/?>(?:<\\/w:${name}>)?`,'i').test(String(xml||''));}
+function countWords(s){return (String(s||'').match(/[\p{L}\p{N}][\p{L}\p{M}\p{N}]*(?:['’״׳\-][\p{L}\p{M}\p{N}]+)*/gu)||[]).length;}
+function entryDate(e){const d=e?.header?.time;if(!(d instanceof Date)||Number.isNaN(d.getTime()))return null;return d;}
+function isDosEpoch(d){return d&&d.getFullYear()===1980&&d.getMonth()===0&&d.getDate()===1&&d.getHours()===0&&d.getMinutes()===0&&d.getSeconds()===0;}
+function textOf(zip,name){const e=zip.getEntry(name);return e?e.getData().toString('utf8'):'';}
+function inspectDocumentProcess(file,doc){
+  const ext=path.extname(file.originalname||'').toLowerCase();
+  if(!['.docx','.docm'].includes(ext))return null;
+  const zip=new AdmZip(file.buffer),entries=zip.getEntries();
+  const core=textOf(zip,'docProps/core.xml'),app=textOf(zip,'docProps/app.xml'),settings=textOf(zip,'word/settings.xml'),document=textOf(zip,'word/document.xml');
+  const reportedWords=Number(tag(app,'Words')||0),reportedPages=Number(tag(app,'Pages')||0),totalEditingMinutes=Number(tag(app,'TotalTime')||0),revision=Number(tag(core,'revision')||0);
+  const created=tag(core,'created'),modified=tag(core,'modified'),creator=tag(core,'creator'),lastModifiedBy=tag(core,'lastModifiedBy');
+  const dates=entries.map(entryDate).filter(Boolean),uniqueZipTimes=[...new Set(dates.map(d=>d.toISOString()))],allDosEpoch=dates.length===entries.length&&dates.length>0&&dates.every(isDosEpoch);
+  const usedRsids=[...new Set([...document.matchAll(/w:rsid(?:R|RPr|Del|P|Sect)="([0-9A-Fa-f]+)"/g)].map(m=>m[1].toUpperCase()))];
+  const declaredRsids=[...new Set([...settings.matchAll(/<w:rsid\s+w:val="([0-9A-Fa-f]+)"\s*\/>/g)].map(m=>m[1].toUpperCase()))];
+  const tracked=(document.match(/<w:(?:ins|del|moveFrom|moveTo)\b/g)||[]).length;
+  const privacy={removePersonalInformation:flag(settings,'removePersonalInformation'),removeDateAndTime:flag(settings,'removeDateAndTime')};
+  const extractedWords=countWords(doc?.text||'');
+  let score=0;const findings=[];
+  const add=(id,weight,severity,observed,en,he)=>{score+=weight;findings.push({id,weight,severity,observed,meaning:{en,he}});};
+  const info=(id,observed,en,he)=>findings.push({id,weight:0,severity:'info',observed,meaning:{en,he}});
+  if(entries.length>=8&&allDosEpoch)add('dos_epoch_package',32,'strong','Every ZIP member carries 1980-01-01 00:00:00','All package-member timestamps are the ZIP/DOS epoch. That is a strong sign of deterministic programmatic packaging or later repackaging; ordinary interactive Word saves normally preserve real package times.','כל רכיבי חבילת ה-DOCX נושאים את חותמת ברירת המחדל של ZIP, ‏01.01.1980 00:00. זהו סימן חזק לאריזה דטרמיניסטית באמצעות תוכנה או לאריזה מחדש של הקובץ, ולא לדפוס שמירה רגיל של Word.');
+  else if(entries.length>=8&&uniqueZipTimes.length===1)add('uniform_package_time',10,'review',uniqueZipTimes[0]||null,'Every package part was written with the same stored time. This can happen during export or one-pass repackaging.','כל רכיבי החבילה נכתבו עם אותה חותמת זמן. הדבר יכול להתרחש בייצוא או באריזה מחדש בפעולה אחת.');
+  if(reportedWords>=1000&&created&&modified&&created===modified)add('zero_metadata_lifetime',18,'strong',`${created} = ${modified}`,'A long document declares exactly the same creation and modification instant. This is consistent with one-shot assembly/export, although metadata can be rewritten.','מסמך ארוך מצהיר על זמן יצירה וזמן שינוי זהים לחלוטין. הדבר מתאים להרכבה או ייצוא בפעולה אחת, אך יש לזכור שמטא-דאטה ניתן לשכתוב.');
+  if(reportedWords>=1000&&totalEditingMinutes===0)add('zero_editing_time',18,'strong','TotalTime = 0 minutes','Word application properties report zero editing minutes despite a substantial document. This is a strong process anomaly, not direct proof of AI authorship.','מאפייני Word מדווחים על אפס דקות עריכה למרות שמדובר במסמך משמעותי. זו חריגת תהליך חזקה, אך לא הוכחה ישירה למחבר בינה מלאכותית.');
+  if(reportedWords>=3000&&reportedPages<=1)add('stale_pagination',12,'review',`Pages = ${reportedPages}; Words = ${reportedWords}`,'The stored pagination count is implausibly low for the stored word count, indicating stale or programmatically inherited application properties.','מספר העמודים השמור נמוך באופן בלתי סביר ביחס למספר המילים השמור, ולכן מאפייני היישום נראים ישנים או מועתקים מתבנית/תהליך יצירה.');
+  if(reportedWords>=1000&&revision<=1)add('single_revision',8,'review',`Revision = ${revision}`,'The package declares only one revision for a long document. This is compatible with export/rebuild workflows and should be reviewed with the other signals.','החבילה מצהירה על גרסה אחת בלבד למסמך ארוך. הדבר מתאים לתהליכי ייצוא או בנייה מחדש, ויש לפרשו יחד עם שאר הסימנים.');
+  if(reportedWords>=1000&&usedRsids.length<=3)add('sparse_used_edit_sessions',8,'review',`${usedRsids.length} used Word session IDs`,'Very few Word revision-session identifiers are used in the document body. This can follow cleanup/export and is useful only as supporting process evidence.','בגוף המסמך נעשה שימוש במעט מאוד מזהי סשן עריכה של Word. הדבר יכול לנבוע גם מניקוי או ייצוא ולכן משמש רק ראיית תהליך תומכת.');
+  if(declaredRsids.length>=8&&usedRsids.length<=3)add('rsid_template_residue',4,'weak',`${declaredRsids.length} declared; ${usedRsids.length} used`,'The settings retain substantially more session IDs than the document body uses, consistent with template residue or reconstructed content.','הגדרות הקובץ שומרות הרבה יותר מזהי סשן מאלה שבפועל משמשים בגוף המסמך, מצב שמתאים לשאריות תבנית או לתוכן שנבנה מחדש.');
+  if(privacy.removePersonalInformation)info('privacy_strip','removePersonalInformation is enabled','Word is configured to remove personal identity properties. Blank creator/editor fields therefore must not be treated as suspicious on their own.','Word מוגדר להסיר פרטי זהות אישיים. לכן שדות יוצר ועורך ריקים אינם סימן מחשיד בפני עצמו.');
+  if(privacy.removeDateAndTime)info('revision_time_strip','removeDateAndTime is enabled','Word is configured to remove revision dates/times. Missing revision timestamps therefore cannot be interpreted as evidence of no editing.','Word מוגדר להסיר תאריכים ושעות של שינויים. לכן היעדר חותמות זמן לעריכות אינו מוכיח שלא בוצעה עריכה.');
+  if(tracked===0)info('no_tracked_changes','0 tracked revision elements','No tracked-change elements are retained. Their absence does not prove that no manual edits occurred.','לא נשמרו רכיבי מעקב שינויים. היעדרם אינו מוכיח שלא בוצעו שינויים ידניים.');
+  score=clamp(score);
+  const status=score>=70?'strong_assembly_signal':score>=40?'assembly_review':score>=20?'limited_process_signal':'ordinary_or_insufficient';
+  const title={en:status==='strong_assembly_signal'?'Strong file-assembly evidence':status==='assembly_review'?'File assembly needs review':status==='limited_process_signal'?'Some process anomalies were found':'No strong file-assembly anomaly',he:status==='strong_assembly_signal'?'נמצאו ראיות חזקות להרכבה או אריזה מחדש של הקובץ':status==='assembly_review'?'תהליך יצירת הקובץ דורש בדיקה':status==='limited_process_signal'?'נמצאו מספר חריגות בתהליך הקובץ':'לא נמצאה חריגת הרכבה חזקה'};
+  const explanation={en:status==='strong_assembly_signal'?`EMET found ${findings.filter(f=>f.weight>0).length} independent process signals. Together they strongly indicate one-shot or programmatic assembly/repackaging. They do not, by themselves, identify which AI system wrote the prose.`:'Process signals are reported separately from authorship because exports and document-repair tools can create similar traces.',he:status==='strong_assembly_signal'?`EMET מצא ${findings.filter(f=>f.weight>0).length} סימני תהליך בלתי תלויים. יחד הם מצביעים בעוצמה גבוהה על הרכבה בפעולה אחת, יצירה תוכנתית או אריזה מחדש. הסימנים לבדם אינם מזהים איזו מערכת בינה מלאכותית כתבה את הטקסט.`:'סימני התהליך מוצגים בנפרד ממקור הכתיבה, משום שגם כלי ייצוא ותיקון מסמכים יכולים ליצור עקבות דומות.'};
+  return {version:VERSION,status,score,title,explanation,findings,metrics:{entries:entries.length,reportedWords,extractedWords,reportedPages,totalEditingMinutes,revision,created,modified,creator:creator||null,lastModifiedBy:lastModifiedBy||null,zipUniqueTimes:uniqueZipTimes.length,allZipTimesDosEpoch:allDosEpoch,usedRsidCount:usedRsids.length,declaredRsidCount:declaredRsids.length,trackedRevisionMarkers:tracked,privacy},limitations:['This score concerns the file creation/packaging process, not semantic authorship.','Export, repair, conversion or privacy tools can remove or rewrite history.','Exact word-level authorship requires retained revision evidence or controlled capture during writing.']};
+}
+module.exports={VERSION,inspectDocumentProcess};
