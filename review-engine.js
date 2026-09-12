@@ -4,6 +4,7 @@ const {VERSION,inspectText,assess}=require('./evidence-text');
 const {readDocx}=require('./evidence-document');
 const {readProvenance}=require('./provenance-reader');
 const {inspectDocumentProcess}=require('./document-process');
+const {buildAuthorshipMap}=require('./authorship-map');
 const TEXT=new Set(['.txt','.md','.csv','.json','.xml','.html','.htm','.js','.ts','.tsx','.jsx','.py','.java','.c','.cpp','.cs','.go','.rs','.php','.rb','.sql','.sh','.yaml','.yml']);
 function resultFor(text,doc=null){
   const inspected=inspectText(text,doc?.paragraphs),assessment=assess(inspected);
@@ -11,8 +12,8 @@ function resultFor(text,doc=null){
   assessment.discourseCount=inspected.discourse.count;
   assessment.metadata=doc?.metadata||{};
   assessment.revisions=doc?.revisions||[];
-  if(doc)assessment.checks.unshift({id:'word_structure',status:'completed'},{id:'stored_revisions',status:'completed'},{id:'file_process',status:'completed'});
-  return {version:VERSION,final:{verdict:assessment.ai.status==='self_reported'?'AI_USE_DISCLOSED':assessment.ai.status==='content_signal'?'AI_RESIDUE_FOUND':'CLASSIFIER_NOT_CONFIGURED',confidence:assessment.ai.status==='self_reported'?'self-reported':'not calibrated',canProve:false,reason:assessment.explanation.en,evidenceGrade:assessment.ai.status==='self_reported'?'document statement':'observations only'},assessment,providers:[],provenance:{c2pa:{status:doc?'unsupported':'not_applicable',manifestPresent:false,validationPassed:false}},local:{ensemble:{score:null,language:inspected.language.code,panels:{},metrics:{words:inspected.words,discourseMarkers:inspected.discourse.count}},style:{language:inspected.language.code,panels:{}},fileForensics:{...doc?.metadata,trackedRevisionMarkers:doc?.revisions?.length??0,hiddenTextProperties:doc?.hiddenTextCount??0,processScore:null},manipulation:{}},segments:{local:[]},coverage:inspected.coverage,limitations:['No text classifier has been trained and calibrated for this deployment.','A declaration is a document statement, not independently verified authorship.','Absence of retained edits is not evidence of AI creation.']};
+  if(doc)assessment.checks.unshift({id:'word_structure',status:'completed'},{id:'stored_revisions',status:'completed'},{id:'file_process',status:'completed'},{id:'ai_origin_map',status:'completed'});
+  return {version:VERSION,final:{verdict:assessment.ai.status==='self_reported'?'AI_USE_DISCLOSED':assessment.ai.status==='content_signal'?'AI_RESIDUE_FOUND':'CLASSIFIER_NOT_CONFIGURED',confidence:assessment.ai.status==='self_reported'?'self-reported':'not calibrated',canProve:false,reason:assessment.explanation.en,evidenceGrade:assessment.ai.status==='self_reported'?'document statement':'observations only'},assessment,providers:[],provenance:{c2pa:{status:doc?'unsupported':'not_applicable',manifestPresent:false,validationPassed:false}},local:{ensemble:{score:null,language:inspected.language.code,panels:{},metrics:{words:inspected.words,discourseMarkers:inspected.discourse.count}},style:{language:inspected.language.code,panels:{}},fileForensics:{...doc?.metadata,trackedRevisionMarkers:doc?.revisions?.length??0,hiddenTextProperties:doc?.hiddenTextCount??0,processScore:null},manipulation:{}},segments:{local:[]},coverage:inspected.coverage,limitations:['The AI origin map is evidence fusion, not mathematical proof of who typed every word.','A declaration is a document statement, not independently verified authorship.','Absence of retained edits is not evidence of AI creation.']};
 }
 function diagnostics(r,text){
   const old=require('./ultimate-engine').panelScores(text);
@@ -51,8 +52,10 @@ function sourceClaim(r) {
 async function analyzeAIFile(file){
   const doc=readDocx(file);
   if(doc){
-    const r=diagnostics(resultFor(doc.text,doc),doc.text);
-    return applyProcess(r,inspectDocumentProcess(file,doc));
+    let r=diagnostics(resultFor(doc.text,doc),doc.text);
+    r=applyProcess(r,inspectDocumentProcess(file,doc));
+    r.assessment.authorshipMap=buildAuthorshipMap(file,r,null);
+    return r;
   }
   const ext=path.extname(file.originalname||'').toLowerCase();
   if(TEXT.has(ext))return analyzeAIText(new TextDecoder('utf-8',{fatal:true}).decode(file.buffer));
