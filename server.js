@@ -7,6 +7,7 @@ const { analyzeFile, analyzeTextInput } = require('./analyzer');
 const { analyzeAIFile, analyzeAIText, VERSION } = require('./review-engine');
 const { validateArchive, repairFilename } = require('./evidence-document');
 const { analyzeFingerprintFile } = require('./fingerprint-lab');
+const { buildAuthorshipMap } = require('./authorship-map');
 const { analyzeMultimodal } = require('./multimodal-engine');
 const app = express();
 const PORT = Number(process.env.PORT || 8080);
@@ -29,14 +30,14 @@ const plans = [
 ];
 const priceIds = {lite:process.env.STRIPE_PRICE_LITE,pro:process.env.STRIPE_PRICE_PRO,business:process.env.STRIPE_PRICE_BUSINESS};
 app.use('/api',(req,res,next)=>{res.setHeader('Cache-Control','no-store');next()});
-app.get('/api/health',(req,res)=>res.json({ok:true,service:'emet-one',version:'0.8.0',engine:VERSION,fingerprint:'EMET-FINGERPRINT-LAB-2026.09.12',multimodal:'EMET-MULTIMODAL-2026.09.12'}));
+app.get('/api/health',(req,res)=>res.json({ok:true,service:'emet-one',version:'0.8.0',engine:VERSION,fingerprint:'EMET-FINGERPRINT-LAB-2026.09.12',authorshipMap:'EMET-AI-ORIGIN-MAP-2026.09.12.2',multimodal:'EMET-MULTIMODAL-2026.09.12'}));
 app.get('/api/engine',(req,res)=>res.json({
   engine:VERSION,
   textClassifier:{status:'not_configured',trained:false,validatedLanguages:[],calibratedProbabilityAvailable:false},
-  localPanels:['Unicode word segmentation','contextual AI disclosures','assistant phrase locations','DOCX visible text mapping','DOCX run fingerprint'],
+  localPanels:['Unicode word segmentation','contextual AI disclosures','assistant phrase locations','DOCX visible text mapping','DOCX run fingerprint','220–440 word authorship context windows'],
   forensicLayers:['OOXML metadata','tracked revisions','C2PA SDK validation states','PDF signature inspection','EXIF/XMP','pixel statistics','OCR','audio waveform baseline','video frame sampling'],
   localBinaries:['tesseract','ffmpeg','ffprobe','pdfinfo','pdfsig','pdftotext','pdftoppm','qpdf'],
-  principle:'Observed content, self-reported AI use, document changes and authenticated claims are separate. Legacy heuristic scores are uncalibrated diagnostics, not AI probabilities.'
+  principle:'Observed content, self-reported AI use, document changes and authenticated claims are separate. Origin-map values are evidence scores, not calibrated AI probabilities.'
 }));
 app.get('/api/plans',(req,res)=>res.json({currency:'USD',plans}));
 app.get('/api/config',(req,res)=>res.json({
@@ -58,6 +59,9 @@ app.post('/api/analyze', rate, upload.single('file'), async (req,res)=>{
       analyzeMultimodal(req.file).catch(e=>({status:'failed',error:e.message}))
     ]);
     aiAnalysis.fingerprintLab=fingerprintLab;
+    if(['.docx','.docm'].includes(ext)){
+      try{aiAnalysis.assessment.authorshipMap=buildAuthorshipMap(req.file,aiAnalysis,fingerprintLab);}catch(e){aiAnalysis.assessment.authorshipMap={supported:false,status:'failed',error:e.message};}
+    }
     if(aiAnalysis.assessment?.metadata)result.metadata={...result.metadata,...aiAnalysis.assessment.metadata};
     res.json({...result,aiAnalysis,multimodal});
   }catch(e){ console.error('File inspection failed:',e.message);res.status(e.statusCode||422).json({error:'File inspection could not complete.',detail:e.message,status:'failed'}); }
@@ -97,7 +101,6 @@ app.use((req,res,next)=>{
   const f=req.path==='/'?'index.html':/^\/[a-z0-9_-]+\.html$/i.test(req.path)?path.basename(req.path):null;
   if(!f)return next();const html=htmlFor(f);if(!html)return next();res.setHeader('Cache-Control','no-store');res.type('html').send(html);
 });
-// Do not publish server-side modules through static file routing.
 const publicScripts=new Set(['app.js','scanner.js','fingerprint-ui.js','multimodal-ui.js','account.js','review-ui.js']);
 app.use((req,res,next)=>{
   const ext=path.extname(req.path).toLowerCase();
