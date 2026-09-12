@@ -2,6 +2,7 @@ const express = require('express');
 const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const Stripe = require('stripe');
 const { analyzeFile, analyzeTextInput } = require('./analyzer');
 const { analyzeAIFile, analyzeAIText, VERSION } = require('./review-engine');
@@ -29,22 +30,59 @@ const plans = [
   {id:'business',name:'Business',price:149,period:'month',scans:2000,maxMb:100,features:['2,000 scans each month','Team workspace','API access','Connected evidence sources','Audit export']}
 ];
 const priceIds = {lite:process.env.STRIPE_PRICE_LITE,pro:process.env.STRIPE_PRICE_PRO,business:process.env.STRIPE_PRICE_BUSINESS};
+
+async function lookupExactGroundTruth(buffer){
+  if(!process.env.SUPABASE_URL||!process.env.SUPABASE_PUBLISHABLE_KEY)return null;
+  const sha256=crypto.createHash('sha256').update(buffer).digest('hex');
+  try{
+    const r=await fetch(`${process.env.SUPABASE_URL}/rest/v1/rpc/lookup_ground_truth_sha`,{
+      method:'POST',
+      headers:{'content-type':'application/json','apikey':process.env.SUPABASE_PUBLISHABLE_KEY,'authorization':`Bearer ${process.env.SUPABASE_PUBLISHABLE_KEY}`},
+      body:JSON.stringify({p_sha256:sha256})
+    });
+    if(!r.ok)return {sha256,matched:false};
+    const rows=await r.json();
+    const row=Array.isArray(rows)?rows[0]:null;
+    return row?{sha256,matched:true,...row}:{sha256,matched:false};
+  }catch{return {sha256,matched:false};}
+}
+
+function applyExactGroundTruth(aiAnalysis,match){
+  if(!match?.matched||!aiAnalysis?.assessment)return;
+  const gt={exact:true,label:match.label,language:match.language||null,sourceNote:match.source_note||null,sha256:match.sha256,evidenceClass:'known_ground_truth_exact_file'};
+  aiAnalysis.assessment.groundTruthMatch=gt;
+  if(aiAnalysis.assessment.authorshipMap?.supported&&match.label==='ai'){
+    const m=aiAnalysis.assessment.authorshipMap;
+    m.knownGroundTruth=gt;
+    m.estimatedAIShare=100;
+    m.documentSignalScore=100;
+    m.method='exact SHA-256 match to a user-confirmed AI ground-truth file; paragraph map below remains diagnostic';
+    for(const item of m.items||[]){
+      item.groundTruth='ai';
+      item.label='strong_ai_signal';
+      item.score=100;
+      item.explanation='This exact file matches a user-confirmed AI ground-truth sample by SHA-256. The 100 score here is recognition of the labeled file, not a generic AI-detector probability.';
+    }
+    m.counts={strongAI:(m.items||[]).length,likelyAI:0,humanEditCandidates:0,mixed:0,low:0};
+  }
+}
+
 app.use('/api',(req,res,next)=>{res.setHeader('Cache-Control','no-store');next()});
-app.get('/api/health',(req,res)=>res.json({ok:true,service:'emet-one',version:'0.8.0',engine:VERSION,fingerprint:'EMET-FINGERPRINT-LAB-2026.09.12',authorshipMap:'EMET-AI-ORIGIN-MAP-2026.09.12.2',multimodal:'EMET-MULTIMODAL-2026.09.12'}));
+app.get('/api/health',(req,res)=>res.json({ok:true,service:'emet-one',version:'0.8.1',engine:VERSION,fingerprint:'EMET-FINGERPRINT-LAB-2026.09.12',authorshipMap:'EMET-AI-ORIGIN-MAP-2026.09.12.2',groundTruth:'EMET-GT-EXACT-2026.09.12',multimodal:'EMET-MULTIMODAL-2026.09.12'}));
 app.get('/api/engine',(req,res)=>res.json({
   engine:VERSION,
   textClassifier:{status:'not_configured',trained:false,validatedLanguages:[],calibratedProbabilityAvailable:false},
-  localPanels:['Unicode word segmentation','contextual AI disclosures','assistant phrase locations','DOCX visible text mapping','DOCX run fingerprint','220–440 word authorship context windows'],
+  localPanels:['Unicode word segmentation','contextual AI disclosures','assistant phrase locations','DOCX visible text mapping','DOCX run fingerprint','220–440 word authorship context windows','exact labeled-file SHA-256 recognition'],
   forensicLayers:['OOXML metadata','tracked revisions','C2PA SDK validation states','PDF signature inspection','EXIF/XMP','pixel statistics','OCR','audio waveform baseline','video frame sampling'],
   localBinaries:['tesseract','ffmpeg','ffprobe','pdfinfo','pdfsig','pdftotext','pdftoppm','qpdf'],
-  principle:'Observed content, self-reported AI use, document changes and authenticated claims are separate. Origin-map values are evidence scores, not calibrated AI probabilities.'
+  principle:'Known labeled files are recognized exactly by hash. Unknown files use evidence fusion. Origin-map values are evidence scores, not generic calibrated AI probabilities.'
 }));
 app.get('/api/plans',(req,res)=>res.json({currency:'USD',plans}));
 app.get('/api/config',(req,res)=>res.json({
   googleAuthConfigured:Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_PUBLISHABLE_KEY),
   supabaseUrl:process.env.SUPABASE_URL||null,supabasePublishableKey:process.env.SUPABASE_PUBLISHABLE_KEY||null,
   billingConfigured:Boolean(process.env.STRIPE_SECRET_KEY && Object.values(priceIds).some(Boolean)),
-  detectionProviders:{c2pa:true,localUltimateEnsemble:true,localFingerprintLab:true,localMultimodal:true},
+  detectionProviders:{c2pa:true,localUltimateEnsemble:true,localFingerprintLab:true,localMultimodal:true,privateGroundTruth:true},
   textClassifier:{status:'not_configured',trained:false},freeScans:1,maxUploadMb:15
 }));
 app.post('/api/analyze', rate, upload.single('file'), async (req,res)=>{
@@ -53,17 +91,19 @@ app.post('/api/analyze', rate, upload.single('file'), async (req,res)=>{
     req.file.originalname=repairFilename(req.file.originalname);
     const ext=path.extname(req.file.originalname).toLowerCase();
     if(['.docx','.docm','.xlsx','.xlsm','.pptx','.pptm'].includes(ext))validateArchive(req.file.buffer);
-    const [result, aiAnalysis, fingerprintLab, multimodal] = await Promise.all([
+    const [result, aiAnalysis, fingerprintLab, multimodal, exactGroundTruth] = await Promise.all([
       analyzeFile(req.file), analyzeAIFile(req.file),
       Promise.resolve().then(()=>analyzeFingerprintFile(req.file)).catch(e=>({supported:false,status:'failed',error:e.message})),
-      analyzeMultimodal(req.file).catch(e=>({status:'failed',error:e.message}))
+      analyzeMultimodal(req.file).catch(e=>({status:'failed',error:e.message})),
+      lookupExactGroundTruth(req.file.buffer)
     ]);
     aiAnalysis.fingerprintLab=fingerprintLab;
     if(['.docx','.docm'].includes(ext)){
       try{aiAnalysis.assessment.authorshipMap=buildAuthorshipMap(req.file,aiAnalysis,fingerprintLab);}catch(e){aiAnalysis.assessment.authorshipMap={supported:false,status:'failed',error:e.message};}
     }
+    applyExactGroundTruth(aiAnalysis,exactGroundTruth);
     if(aiAnalysis.assessment?.metadata)result.metadata={...result.metadata,...aiAnalysis.assessment.metadata};
-    res.json({...result,aiAnalysis,multimodal});
+    res.json({...result,aiAnalysis,multimodal,groundTruth:exactGroundTruth});
   }catch(e){ console.error('File inspection failed:',e.message);res.status(e.statusCode||422).json({error:'File inspection could not complete.',detail:e.message,status:'failed'}); }
 });
 app.post('/api/analyze-text', rate, async (req,res)=>{
