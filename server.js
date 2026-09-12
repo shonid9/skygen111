@@ -29,7 +29,13 @@ const plans = [
 ];
 const priceIds = {lite:process.env.STRIPE_PRICE_LITE,pro:process.env.STRIPE_PRICE_PRO,business:process.env.STRIPE_PRICE_BUSINESS};
 
-app.get('/api/health',(req,res)=>res.json({ok:true,service:'emet-one',version:'0.3.0',engine:'EMET-AI-2026.09'}));
+app.get('/api/health',(req,res)=>res.json({ok:true,service:'emet-one',version:'0.4.0',engine:'EMET-AI-2026.09.12'}));
+app.get('/api/engine',(req,res)=>res.json({
+  engine:'EMET-AI-2026.09.12',
+  localPanels:['rhythm','lexical','discourse','surface-style','predictability','AI-residue'],
+  forensicLayers:['C2PA','OOXML edit process','PDF incremental updates','EXIF/XMP','Unicode evasion','mixed-authorship windows'],
+  principle:'Verified attribution is reserved for evidence-backed provenance. Statistical signals remain probabilistic.'
+}));
 app.get('/api/plans',(req,res)=>res.json({currency:'USD',plans}));
 app.get('/api/config',(req,res)=>res.json({
   googleAuthConfigured:Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_PUBLISHABLE_KEY),
@@ -38,6 +44,7 @@ app.get('/api/config',(req,res)=>res.json({
   billingConfigured:Boolean(process.env.STRIPE_SECRET_KEY && Object.values(priceIds).some(Boolean)),
   detectionProviders:{
     c2pa:true,
+    localEnsemble:true,
     gptzero:Boolean(process.env.GPTZERO_API_KEY),
     pangram:Boolean(process.env.PANGRAM_API_KEY),
     copyleaks:Boolean(process.env.COPYLEAKS_EMAIL && process.env.COPYLEAKS_API_KEY),
@@ -52,7 +59,7 @@ app.post('/api/analyze', rate, upload.single('file'), async (req,res)=>{
     if(!req.file) return res.status(400).json({error:'Choose a file first.'});
     const [result, aiAnalysis] = await Promise.all([
       analyzeFile(req.file),
-      analyzeAIFile(req.file).catch(e=>({version:'EMET-AI-2026.09',final:{verdict:'INCONCLUSIVE',confidence:'low',canProve:false,reason:'The AI/provenance layer could not complete.',evidenceGrade:'engine error'},error:e.message}))
+      analyzeAIFile(req.file).catch(e=>({version:'EMET-AI-2026.09.12',final:{verdict:'INCONCLUSIVE',confidence:'low',canProve:false,reason:'The AI/provenance layer could not complete.',evidenceGrade:'engine error'},error:e.message}))
     ]);
     res.json({...result,aiAnalysis});
   }catch(e){ console.error(e); res.status(500).json({error:'The file could not be analyzed.',detail:e.message}); }
