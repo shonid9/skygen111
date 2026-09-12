@@ -5,6 +5,7 @@ const path = require('path');
 const Stripe = require('stripe');
 const { analyzeFile, analyzeTextInput } = require('./analyzer');
 const { analyzeAIFile, analyzeAIText } = require('./ultimate-engine');
+const { analyzeFingerprintFile } = require('./fingerprint-lab');
 
 const app = express();
 const PORT = Number(process.env.PORT || 8080);
@@ -29,12 +30,13 @@ const plans = [
 ];
 const priceIds = {lite:process.env.STRIPE_PRICE_LITE,pro:process.env.STRIPE_PRICE_PRO,business:process.env.STRIPE_PRICE_BUSINESS};
 
-app.get('/api/health',(req,res)=>res.json({ok:true,service:'emet-one',version:'0.5.0',engine:'EMET-AI-ULTIMATE-2026.09.12'}));
+app.get('/api/health',(req,res)=>res.json({ok:true,service:'emet-one',version:'0.6.0',engine:'EMET-AI-ULTIMATE-2026.09.12',fingerprint:'EMET-FINGERPRINT-LAB-2026.09.12'}));
 app.get('/api/engine',(req,res)=>res.json({
   engine:'EMET-AI-ULTIMATE-2026.09.12',
-  localPanels:['rhythm','lexical','discourse','surface-style','predictability','AI-residue','document-process'],
-  forensicLayers:['C2PA','OOXML timeline','ZIP/core timestamp conflicts','revision trace density','PDF incremental updates','EXIF/XMP','Unicode evasion','mixed-authorship windows'],
-  principle:'Verified attribution is reserved for evidence-backed provenance. Statistical and process signals remain probabilistic.'
+  fingerprint:'EMET-FINGERPRINT-LAB-2026.09.12',
+  localPanels:['rhythm','lexical','discourse','surface-style','predictability','AI-residue','document-process','DOCX run fingerprint'],
+  forensicLayers:['C2PA','OOXML timeline','ZIP/core timestamp conflicts','revision trace density','DOCX paragraph/run locators','RSID edit-session boundaries','tracked insertions/deletions','run-style/proofing anomalies','PDF incremental updates','EXIF/XMP','Unicode evasion','mixed-authorship windows'],
+  principle:'Verified attribution is reserved for evidence-backed provenance. Span-level edit candidates are hypotheses unless the file stores direct revision evidence.'
 }));
 app.get('/api/plans',(req,res)=>res.json({currency:'USD',plans}));
 app.get('/api/config',(req,res)=>res.json({
@@ -42,7 +44,7 @@ app.get('/api/config',(req,res)=>res.json({
   supabaseUrl:process.env.SUPABASE_URL||null,
   supabasePublishableKey:process.env.SUPABASE_PUBLISHABLE_KEY||null,
   billingConfigured:Boolean(process.env.STRIPE_SECRET_KEY && Object.values(priceIds).some(Boolean)),
-  detectionProviders:{c2pa:true,localUltimateEnsemble:true},
+  detectionProviders:{c2pa:true,localUltimateEnsemble:true,localFingerprintLab:true},
   freeScans:1,
   maxUploadMb:15
 }));
@@ -50,10 +52,12 @@ app.get('/api/config',(req,res)=>res.json({
 app.post('/api/analyze', rate, upload.single('file'), async (req,res)=>{
   try{
     if(!req.file) return res.status(400).json({error:'Choose a file first.'});
-    const [result, aiAnalysis] = await Promise.all([
+    const [result, aiAnalysis, fingerprintLab] = await Promise.all([
       analyzeFile(req.file),
-      analyzeAIFile(req.file).catch(e=>({version:'EMET-AI-ULTIMATE-2026.09.12',final:{verdict:'INCONCLUSIVE',confidence:'low',canProve:false,reason:'The AI/provenance layer could not complete.',evidenceGrade:'engine error'},error:e.message}))
+      analyzeAIFile(req.file).catch(e=>({version:'EMET-AI-ULTIMATE-2026.09.12',final:{verdict:'INCONCLUSIVE',confidence:'low',canProve:false,reason:'The AI/provenance layer could not complete.',evidenceGrade:'engine error'},error:e.message})),
+      Promise.resolve().then(()=>analyzeFingerprintFile(req.file)).catch(e=>({supported:false,error:e.message}))
     ]);
+    if(aiAnalysis&&typeof aiAnalysis==='object') aiAnalysis.fingerprintLab=fingerprintLab;
     res.json({...result,aiAnalysis});
   }catch(e){ console.error(e); res.status(500).json({error:'The file could not be analyzed.',detail:e.message}); }
 });
