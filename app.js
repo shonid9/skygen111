@@ -171,12 +171,61 @@
 
   /* ------------------------------------------------------ COMPARE SLIDER */
   document.querySelectorAll('.compare').forEach(c => {
-    const set = x => { const r = c.getBoundingClientRect(); c.style.setProperty('--p', `${clamp((x - r.left) / r.width, .04, .96) * 100}%`); };
-    let drag = false;
-    c.addEventListener('pointerdown', e => { drag = true; set(e.clientX); });
-    addEventListener('pointerup', () => drag = false);
-    addEventListener('pointermove', e => { if (drag) set(e.clientX); });
-    if (fine) c.addEventListener('mousemove', e => set(e.clientX));
+    const handle = c.querySelector('.cmpHandle');
+    let p = 50, raf = 0, drag = false, armed = false, pid = null, grab = 0, sx = 0, sy = 0, st = 0;
+
+    /* keep the drag pill fully inside the rounded card on every screen size */
+    const limits = () => { const w = c.getBoundingClientRect().width || 1, m = clamp(58 / w * 100, 4, 20); return [m, 100 - m]; };
+    const paint = () => { raf = 0; c.style.setProperty('--p', `${p}%`); c.setAttribute('aria-valuenow', Math.round(p)); };
+    const setTo = v => { const [a, b] = limits(); p = clamp(v, a, b); if (!raf) raf = requestAnimationFrame(paint); };
+    const atX = x => { const r = c.getBoundingClientRect(); return r.width ? (x - r.left) / r.width * 100 : 50; };
+    const glide = () => { c.classList.add('smooth'); clearTimeout(st); st = setTimeout(() => c.classList.remove('smooth'), 380); };
+    const end = () => { try { if (pid !== null) c.releasePointerCapture(pid); } catch (_) {} drag = armed = false; pid = null; c.classList.remove('dragging'); };
+
+    c.tabIndex = 0;
+    c.setAttribute('role', 'slider');
+    c.setAttribute('aria-label', 'Drag to compare the issued receipt with the one received in accounting');
+    c.setAttribute('aria-valuemin', '0'); c.setAttribute('aria-valuemax', '100');
+    setTo(50);
+
+    c.addEventListener('pointerdown', e => {
+      if (e.button > 0 || pid !== null) return;
+      pid = e.pointerId; sx = e.clientX; sy = e.clientY;
+      const onHandle = handle && (e.target === handle || handle.contains(e.target));
+      if (onHandle || e.pointerType === 'mouse') {
+        /* grabbing the pill keeps the divider where the finger took it, no jump */
+        grab = onHandle ? p - atX(e.clientX) : 0;
+        drag = true; c.classList.add('dragging'); c.setPointerCapture(pid);
+        if (!onHandle) setTo(atX(e.clientX));
+      } else armed = true; /* touch away from the pill: wait and see if this is a scroll */
+    });
+
+    c.addEventListener('pointermove', e => {
+      if (e.pointerId !== pid) return;
+      if (armed) {
+        const dx = Math.abs(e.clientX - sx), dy = Math.abs(e.clientY - sy);
+        if (dy > dx && dy > 6) return end();  /* vertical intent: let the page scroll */
+        if (dx < 8) return;
+        armed = false; drag = true; grab = 0; c.classList.add('dragging'); c.setPointerCapture(pid);
+      }
+      if (drag) setTo(atX(e.clientX) + grab);
+    });
+
+    c.addEventListener('pointerup', e => { if (e.pointerId !== pid) return; if (armed) { glide(); setTo(atX(e.clientX)); } end(); });
+    c.addEventListener('pointercancel', end);
+    addEventListener('resize', () => setTo(p));
+
+    c.addEventListener('keydown', e => {
+      const step = e.shiftKey ? 12 : 4;
+      if (e.key === 'ArrowLeft') setTo(p - step);
+      else if (e.key === 'ArrowRight') setTo(p + step);
+      else if (e.key === 'Home') { glide(); setTo(0); }
+      else if (e.key === 'End') { glide(); setTo(100); }
+      else return;
+      e.preventDefault();
+    });
+
+    if (fine) c.addEventListener('mousemove', e => { if (!drag) setTo(atX(e.clientX)); });
   });
 
   /* ------------------------------------------------------------ COUNTERS */
