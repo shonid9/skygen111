@@ -1,0 +1,12 @@
+'use strict';
+const test=require('node:test');const assert=require('node:assert/strict');
+const AdmZip=require('adm-zip');
+const {analyzeAIFile,analyzeAIText}=require('../review-engine');
+const {readDocx,validateArchive}=require('../evidence-document');
+const W='http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+function fixture(text){const zip=new AdmZip();zip.addFile('word/document.xml',Buffer.from(`<w:document xmlns:w="${W}"><w:body><w:p><w:r><w:t>${text}</w:t></w:r></w:p></w:body></w:document>`));zip.addFile('docProps/core.xml',Buffer.from('<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:d="http://purl.org/dc/terms/"><cp:lastModifiedBy>1</cp:lastModifiedBy><d:created>2026-09-09T20:45:00Z</d:created><d:modified>2026-09-09T20:45:00Z</d:modified></cp:coreProperties>'));return{buffer:zip.toBuffer(),originalname:'בדיקת עברית.docx',mimetype:'application/vnd.openxmlformats-officedocument.wordprocessingml.document'}}
+test('Real DOCX archive to review contains source-located Hebrew declaration',async()=>{const r=await analyzeAIFile(fixture('השתמשתי בבינה מלאכותית לכתיבת המסמך.'));assert.equal(r.assessment.ai.status,'self_reported');assert.equal(r.assessment.ai.proven,false);assert.equal(r.assessment.observations[0].locator.part,'word/document.xml');assert.equal(r.assessment.metadata.modified,'2026-09-09T20:45:00Z')});
+test('An exported ordinary DOCX is not declared generative from empty revision history',async()=>{const r=await analyzeAIFile(fixture('תיאור של הטקסט והנושא במסמך. '.repeat(100)));assert.equal(r.assessment.ai.status,'not_assessed');assert.equal(r.assessment.model.status,'not_configured');assert.equal(r.final.canProve,false)});
+test('Text API includes readable assessment and diagnostics without calibrated probability',async()=>{const r=await analyzeAIText('בנוסף לכן עם זאת חשוב לציין. '.repeat(50));assert.equal(r.assessment.ai.probability,null);assert.ok(r.assessment.discourseCount>0);assert.equal(r.diagnostics.status,'uncalibrated')});
+test('Original extraction leaves uploaded bytes unchanged',()=>{const file=fixture('שלום 🧪'),before=Buffer.from(file.buffer);readDocx(file);assert.deepEqual(file.buffer,before)});
+test('Oversized expanded archive is rejected before extraction',()=>{const zip=new AdmZip();zip.addFile('big.xml',Buffer.alloc(9*1024*1024,32));assert.throws(()=>validateArchive(zip.toBuffer()),/limit/)});
