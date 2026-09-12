@@ -10,6 +10,7 @@ const { validateArchive, repairFilename } = require('./evidence-document');
 const { analyzeFingerprintFile } = require('./fingerprint-lab');
 const { buildAuthorshipMap } = require('./authorship-map');
 const { analyzeMultimodal } = require('./multimodal-engine');
+const { installAdminApi } = require('./admin-api');
 const app = express();
 const PORT = Number(process.env.PORT || 8080);
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024, files: 1 } });
@@ -32,13 +33,13 @@ const plans = [
 const priceIds = {lite:process.env.STRIPE_PRICE_LITE,pro:process.env.STRIPE_PRICE_PRO,business:process.env.STRIPE_PRICE_BUSINESS};
 
 async function lookupExactGroundTruth(buffer){
-  if(!process.env.SUPABASE_URL||!process.env.SUPABASE_PUBLISHABLE_KEY)return null;
+  if(!process.env.SUPABASE_URL||!process.env.SUPABASE_PUBLISHABLE_KEY||!process.env.EMET_INTERNAL_DB_TOKEN)return null;
   const sha256=crypto.createHash('sha256').update(buffer).digest('hex');
   try{
-    const r=await fetch(`${process.env.SUPABASE_URL}/rest/v1/rpc/lookup_ground_truth_sha`,{
+    const r=await fetch(`${process.env.SUPABASE_URL}/rest/v1/rpc/lookup_ground_truth_sha_internal`,{
       method:'POST',
       headers:{'content-type':'application/json','apikey':process.env.SUPABASE_PUBLISHABLE_KEY,'authorization':`Bearer ${process.env.SUPABASE_PUBLISHABLE_KEY}`},
-      body:JSON.stringify({p_sha256:sha256})
+      body:JSON.stringify({p_sha256:sha256,p_token:process.env.EMET_INTERNAL_DB_TOKEN})
     });
     if(!r.ok)return {sha256,matched:false};
     const rows=await r.json();
@@ -68,7 +69,7 @@ function applyExactGroundTruth(aiAnalysis,match){
 }
 
 app.use('/api',(req,res,next)=>{res.setHeader('Cache-Control','no-store');next()});
-app.get('/api/health',(req,res)=>res.json({ok:true,service:'emet-one',version:'0.8.1',engine:VERSION,fingerprint:'EMET-FINGERPRINT-LAB-2026.09.12',authorshipMap:'EMET-AI-ORIGIN-MAP-2026.09.12.2',groundTruth:'EMET-GT-EXACT-2026.09.12',multimodal:'EMET-MULTIMODAL-2026.09.12'}));
+app.get('/api/health',(req,res)=>res.json({ok:true,service:'emet-one',version:'0.9.0',engine:VERSION,fingerprint:'EMET-FINGERPRINT-LAB-2026.09.12',authorshipMap:'EMET-AI-ORIGIN-MAP-2026.09.12.2',groundTruth:'EMET-GT-EXACT-2026.09.12',adminLab:'EMET-LAB-2026.09.12',multimodal:'EMET-MULTIMODAL-2026.09.12'}));
 app.get('/api/engine',(req,res)=>res.json({
   engine:VERSION,
   textClassifier:{status:'not_configured',trained:false,validatedLanguages:[],calibratedProbabilityAvailable:false},
@@ -85,6 +86,9 @@ app.get('/api/config',(req,res)=>res.json({
   detectionProviders:{c2pa:true,localUltimateEnsemble:true,localFingerprintLab:true,localMultimodal:true,privateGroundTruth:true},
   textClassifier:{status:'not_configured',trained:false},freeScans:1,maxUploadMb:15
 }));
+
+installAdminApi(app);
+
 app.post('/api/analyze', rate, upload.single('file'), async (req,res)=>{
   try{
     if(!req.file) return res.status(400).json({error:'Choose a file first.'});
@@ -132,7 +136,7 @@ function htmlFor(file){
   html=html.replace(/<span class="mark">E1<\/span>/g,'<img class="brandLogo" src="/logo-emet-one.svg" alt="EMET ONE">');
   html=html.replace(/<img src="\/logo-emet-one\.svg" alt="EMET ONE"[^>]*>/g,'<img class="brandLogo" src="/logo-emet-one.svg" alt="EMET ONE">');
   if(!html.includes('/brand.css'))html=html.replace('</head>','<link rel="stylesheet" href="/brand.css"></head>');
-  if(!html.includes('href="/pricing.html"'))html=html.replace('</div><a class="navcta"','<a href="/pricing.html">Pricing</a></div><a class="navcta"');
+  if(!html.includes('href="/pricing.html"')&&file!=='admin-lab.html')html=html.replace('</div><a class="navcta"','<a href="/pricing.html">Pricing</a></div><a class="navcta"');
   if(file==='verify.html')html=html.replace('</head>','<link rel="stylesheet" href="/review.css?v=1"></head>').replace('</body>','<script src="/review-ui.js?v=1"></script></body>');
   return html;
 }
@@ -141,7 +145,7 @@ app.use((req,res,next)=>{
   const f=req.path==='/'?'index.html':/^\/[a-z0-9_-]+\.html$/i.test(req.path)?path.basename(req.path):null;
   if(!f)return next();const html=htmlFor(f);if(!html)return next();res.setHeader('Cache-Control','no-store');res.type('html').send(html);
 });
-const publicScripts=new Set(['app.js','scanner.js','fingerprint-ui.js','multimodal-ui.js','account.js','review-ui.js']);
+const publicScripts=new Set(['app.js','scanner.js','fingerprint-ui.js','multimodal-ui.js','account.js','review-ui.js','admin-lab.js']);
 app.use((req,res,next)=>{
   const ext=path.extname(req.path).toLowerCase();
   if(req.path.startsWith('/api/')||!(ext==='.js'?publicScripts.has(req.path.slice(1)):['.css','.svg','.png','.jpg','.jpeg','.webp','.ico','.html'].includes(ext)))return res.status(404).json({error:'Not found'});
