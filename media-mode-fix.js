@@ -1,94 +1,25 @@
-(()=>{
-'use strict';
+(()=>{'use strict';
 const IMAGE_RE=/\.(jpe?g|png|webp|tiff?)$/i;
 let selectedFile=null,lastImageScan=null,lastUrl=null,renderSeq=0;
 const $=s=>document.querySelector(s);
-const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot',"'":'&#39;'}[c]));
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function rememberFile(f){if(f&&IMAGE_RE.test(f.name||'')){selectedFile=f;window.__EMET_MEDIA_FILE=f;}else if(f){selectedFile=null;window.__EMET_MEDIA_FILE=null;}}
 document.addEventListener('change',e=>{if(e.target?.id==='fileInput')rememberFile(e.target.files?.[0]);},true);
 document.addEventListener('drop',e=>{const f=e.dataTransfer?.files?.[0];if(f)rememberFile(f);},true);
-
 const nativeFetch=window.fetch.bind(window);
-window.fetch=async function(input,init){
-  const r=await nativeFetch(input,init);
-  try{
-    const u=typeof input==='string'?input:input?.url||'';
-    if(u.includes('/api/analyze')&&!u.includes('/api/analyze-text')&&r.ok){
-      const d=await r.clone().json();
-      if(d?.multimodal?.kind==='image'){
-        lastImageScan=d;window.__EMET_MEDIA_LAST_SCAN=d;window.__EMET_LAST_SCAN=null;
-        const seq=++renderSeq;setTimeout(()=>{if(seq===renderSeq)renderImageResult(d);},40);
-      }else window.__EMET_LAST_SCAN=d;
-    }
-  }catch(err){console.warn('EMET media UI hook:',err);}
-  return r;
-};
-
+window.fetch=async function(input,init){const r=await nativeFetch(input,init);try{const u=typeof input==='string'?input:input?.url||'';if(u.includes('/api/analyze')&&!u.includes('/api/analyze-text')&&r.ok){const d=await r.clone().json();if(d?.multimodal?.kind==='image'){lastImageScan=d;window.__EMET_MEDIA_LAST_SCAN=d;window.__EMET_LAST_SCAN=null;const seq=++renderSeq;setTimeout(()=>{if(seq===renderSeq)renderImageResult(d);},40);}else window.__EMET_LAST_SCAN=d;}}catch(err){console.warn('EMET media UI hook:',err);}return r;};
 function estimateImage(d){
-  const m=d?.multimodal||{},gt=d?.groundTruth;
-  if(gt?.matched&&gt?.label==='ai')return{score:100,confidence:'verified',label:'Verified AI origin · exact known ground truth',agreement:100,whole:true,verified:true,reasons:['Exact SHA-256 match to a user-confirmed fully AI-generated image.'],camera:null};
-  if(gt?.matched&&gt?.label==='human')return{score:0,confidence:'verified',label:'Verified original/human source · exact known ground truth',agreement:100,whole:false,verified:true,reasons:['Exact SHA-256 match to a user-confirmed original image.'],camera:null};
-  const vf=m?.visionFusion?.aiOriginEstimate;
-  if(vf&&Number.isFinite(Number(vf.score))){
-    const score=Math.max(0,Math.min(100,Number(vf.score))),confidence=vf.confidence||'unknown';
-    const label=score>=85?'Strong synthetic-origin signal':score>=65?'Elevated synthetic-origin signal':score>=40?'Mixed synthetic characteristics':'Low synthetic-origin signal';
-    return{score,confidence,label,agreement:Number(vf.agreement||0),whole:m?.visionFusion?.localization?.mode==='whole_image',reasons:(vf.signals||[]).filter(x=>Number(x.score)>=55).sort((a,b)=>b.score-a.score).map(x=>`${x.id.replaceAll('_',' ')}: ${Math.round(x.score)}/100`),camera:vf.cameraEvidence||null};
-  }
-  const s=Number(m?.syntheticImageSignal?.score||0),ela=Number(m?.recompression?.recompressionAnomalyScore||0),copy=Number(m?.copyMove?.copyMoveSignal||0),p=m?.pixelForensics||{},fingerprints=m?.metadata?.generatorFingerprints||[];
-  if(fingerprints.length)return{score:Math.max(94,s),confidence:'high',label:'Strong AI origin signal',whole:true,reasons:[`Generator fingerprint: ${fingerprints.join(', ')}`]};
-  const noise=Math.min(100,Math.max(0,(3-Number(p.noiseResidual||3))*18)),edge=Math.min(100,Math.max(0,Number(p.edgeEnergy||0)*3));
-  let score=Math.round(s*.50+ela*.18+copy*.14+noise*.10+edge*.08);score=Math.max(1,Math.min(99,score));
-  return{score,confidence:score>=70?'medium-high':score>=45?'medium':'low-medium',label:score>=75?'Strong AI or synthetic-edit signal':score>=55?'Elevated AI or synthetic-edit signal':score>=30?'Some synthetic characteristics':'Low synthetic signal',whole:score>=88,reasons:m?.syntheticImageSignal?.reasons||[]};
+ const m=d?.multimodal||{},gt=d?.groundTruth,pgt=d?.perceptualGroundTruth||m?.perceptualGroundTruth||null,pair=pgt?.pairContrast||null;
+ if(gt?.matched&&gt?.label==='ai')return{score:100,confidence:'verified',label:'Verified AI origin · exact known ground truth',agreement:100,whole:true,verified:true,lineage:true,reasons:['Exact SHA-256 match to a user-confirmed fully AI-generated image.'],camera:null,pgt,pair};
+ if(gt?.matched&&gt?.label==='human')return{score:0,confidence:'verified',label:'Verified original source · exact known ground truth',agreement:100,whole:false,verified:true,lineage:true,reasons:['Exact SHA-256 match to a user-confirmed original image.'],camera:null,pgt,pair};
+ const vf=m?.visionFusion?.aiOriginEstimate;let score=vf&&Number.isFinite(Number(vf.score))?Math.max(0,Math.min(100,Number(vf.score))):0,confidence=vf?.confidence||'unknown',whole=m?.visionFusion?.localization?.mode==='whole_image',lineage=false;
+ const reasons=(vf?.signals||[]).filter(x=>Number(x.score)>=55).sort((a,b)=>b.score-a.score).map(x=>`${String(x.id||'signal').replaceAll('_',' ')}: ${Math.round(Number(x.score)||0)}/100`);
+ const aiLineage=pgt?.classification==='ai'&&(Number(pgt?.bestAI?.similarity||0)>=.90||pair?.classification==='ai');const humanLineage=pgt?.classification==='human'&&(Number(pgt?.bestHuman?.similarity||0)>=.90||pair?.classification==='human');
+ if(aiLineage){const s1=Math.round(Number(pgt?.bestAI?.similarity||0)*100),s2=Math.round(Number(pair?.aiSimilarity||0)*100),margin=Number(pair?.margin??pgt?.contrastMargin??0);score=Math.max(score,Math.min(98,Math.round(86+Math.max(s1,s2)-90+Math.max(0,margin)*70)));confidence='high';whole=true;lineage=true;reasons.unshift(`synthetic lineage match: ${Math.max(s1,s2)}/100`,`original-vs-synthetic contrast margin: ${Math.round(margin*1000)/10}%`);}else if(humanLineage){const hs=Math.max(Number(pgt?.bestHuman?.similarity||0),Number(pair?.humanSimilarity||0));score=Math.min(score||100,Math.max(1,Math.round((1-hs)*100+5)));confidence='high';lineage=true;reasons.unshift(`original lineage match: ${Math.round(hs*100)}/100`);}
+ if(!vf||!Number.isFinite(Number(vf.score))){const s=Number(m?.syntheticImageSignal?.score||0),ela=Number(m?.recompression?.recompressionAnomalyScore||0),copy=Number(m?.copyMove?.copyMoveSignal||0),p=m?.pixelForensics||{},fingerprints=m?.metadata?.generatorFingerprints||[];if(fingerprints.length){score=Math.max(94,s);confidence='high';whole=true;reasons.unshift(`generator fingerprint: ${fingerprints.join(', ')}`);}else{const noise=Math.min(100,Math.max(0,(3-Number(p.noiseResidual||3))*18)),edge=Math.min(100,Math.max(0,Number(p.edgeEnergy||0)*3));score=Math.max(1,Math.min(99,Math.round(s*.50+ela*.18+copy*.14+noise*.10+edge*.08)));confidence=score>=70?'medium-high':score>=45?'medium':'low-medium';whole=score>=88;}}
+ const label=score>=85?'Strong synthetic-origin signal':score>=65?'Elevated synthetic-origin signal':score>=40?'Mixed synthetic characteristics':'Low synthetic-origin signal';return{score,confidence,label,agreement:Number(vf?.agreement||0),whole,lineage,verified:false,reasons,camera:vf?.cameraEvidence||null,pgt,pair};
 }
-
-function credibleRegions(m,e){
-  if(e.verified)return[];
-  const raw=m?.visionFusion?.localization?.regions||[];
-  const gen=(m?.metadata?.generatorFingerprints||[]).length>0 || (m?.deepContainer?.container?.generatorMarkers||[]).length>0;
-  const direct=gen || e.score>=95;
-  if(!direct && (Number(e.score)<45 || Number(e.agreement)<35))return [];
-  const core=new Set(['noise','flatNoise','cfa','channelResidual','jpegPhase','edgeNoise','laplacian','grid']);
-  return raw.map(r=>{
-    const dom=Array.isArray(r.dominant)?r.dominant:[];
-    const strong=dom.filter(x=>core.has(x.signal)&&Number(x.strength)>=1.35);
-    const veryStrong=dom.filter(x=>core.has(x.signal)&&Number(x.strength)>=2.0);
-    const required=e.score>=65?2:3;
-    if(!direct && (strong.length<required || Number(r.score)<(e.score>=65?65:75)))return null;
-    if(!direct && e.score<55 && veryStrong.length<2)return null;
-    const localCorroboration=Math.max(Number(m?.recompression?.recompressionAnomalyScore||0),Number(m?.copyMove?.copyMoveSignal||0),Number(m?.visionFusion?.aiOriginEstimate?.boundaryAdhesion||0));
-    let displayScore=Number(r.score)||0;
-    if(!direct){
-      const ceiling=Math.min(92,Math.round(Number(e.score)+18+Number(e.agreement)*.16+(localCorroboration>=60?8:0)));
-      displayScore=Math.min(displayScore,ceiling);
-    }
-    return{...r,displayScore,forensicVotes:strong.length};
-  }).filter(Boolean).sort((a,b)=>b.displayScore-a.displayScore).slice(0,10);
-}
-
-function panelHtml(d,e){
-  const m=d.multimodal||{},vf=m.visionFusion||{},fp=(m?.metadata?.generatorFingerprints||[]).join(', '),name=selectedFile?.name||d?.file?.name||'Image',regions=credibleRegions(m,e),rawCount=vf?.localization?.regions?.length||0;
-  return `<section class="resultCard emetImageOriginPanel" data-image-origin-panel="1">
-    <div class="emetImageHero"><div><div class="eyebrow">EMET VISION FUSION</div><h2>${esc(e.score)}% AI origin ${e.verified?'verified':'estimate'}</h2><p>${esc(e.label)} · confidence ${esc(e.confidence)}.</p></div><div class="emetImagePct">${esc(e.score)}<small>%</small></div></div>
-    <div class="emetImageStage"><canvas class="emetImageCanvas" aria-label="Image forensic localization map"></canvas><div class="emetLegend"><span><i class="whole"></i>whole-image synthetic signal</span><span><i class="local"></i>corroborated local AI/edit region</span></div></div>
-    <div class="emetImageSummary"><div><span>File</span><b>${esc(name)}</b></div><div><span>Evidence agreement</span><b>${esc(e.agreement??0)}/100</b></div><div><span>Corroborated regions</span><b>${regions.length}</b></div><div><span>Raw texture outliers rejected</span><b>${e.verified?rawCount:Math.max(0,rawCount-regions.length)}</b></div><div><span>Generator fingerprint</span><b>${fp?esc(fp):'None found'}</b></div><div><span>Camera evidence</span><b>${e.camera?esc(e.camera.score)+'/100':'N/A'}</b></div><div><span>Recompression</span><b>${m?.recompression?.supported?Math.round(Number(m.recompression.recompressionAnomalyScore||0))+'/100':'N/A'}</b></div></div>
-    ${e.reasons?.length?`<div class="whyBox"><b>${e.verified?'Verification evidence':'Signals contributing most'}</b>${e.reasons.slice(0,8).map(x=>`<span>${esc(x)}</span>`).join('')}</div>`:''}
-    ${regions.length?`<div class="whyBox"><b>Corroborated localized regions</b>${regions.slice(0,6).map((r,i)=>`<span>Region ${i+1}: ${Math.round(r.displayScore)}/100 · ${r.forensicVotes} independent forensic channels · ${(r.w*100).toFixed(1)}% × ${(r.h*100).toFixed(1)}% of image</span>`).join('')}</div>`:e.verified&&e.whole?`<div class="whyBox"><b>Whole image verified as AI</b><span>The entire image is highlighted because the exact file is a known AI ground-truth sample. Local boxes would be misleading.</span></div>`:`<div class="whyBox"><b>No local region passed the corroboration gate</b><span>Natural texture changes are suppressed unless multiple forensic channels agree.</span></div>`}
-    <details class="advanced"><summary>Advanced image evidence</summary><div class="detailList"><div><span>Vision engine</span><b>${esc(vf.version||'local baseline')}</b></div><div><span>Dimensions</span><b>${esc(m?.dimensions?.width||'?')} × ${esc(m?.dimensions?.height||'?')}</b></div><div><span>Noise residual</span><b>${esc(vf?.globalForensics?.highPass??m?.pixelForensics?.noiseResidual??'N/A')}</b></div><div><span>Edge energy</span><b>${esc(vf?.globalForensics?.edge??m?.pixelForensics?.edgeEnergy??'N/A')}</b></div><div><span>Entropy</span><b>${esc(vf?.globalForensics?.entropy??m?.pixelForensics?.entropy??'N/A')}</b></div><div><span>8px periodicity</span><b>${esc(vf?.globalForensics?.grid8??'N/A')}</b></div><div><span>Methods</span><b>${esc((vf.method||[]).join(' · '))}</b></div></div></details>
-    <p class="emetImageNote">EMET separates exact verification from statistical detection. Exact known AI files are marked across the whole image; unknown files use corroborated forensic localization.</p>
-  </section>`;
-}
-
-async function drawMap(canvas,file,e,m){
-  if(!canvas||!file)return;if(lastUrl){try{URL.revokeObjectURL(lastUrl);}catch{}}
-  lastUrl=URL.createObjectURL(file);const img=new Image();img.decoding='async';img.src=lastUrl;await img.decode();
-  const max=720,scale=Math.min(1,max/Math.max(img.naturalWidth,img.naturalHeight)),w=Math.max(1,Math.round(img.naturalWidth*scale)),h=Math.max(1,Math.round(img.naturalHeight*scale));canvas.width=w;canvas.height=h;
-  const ctx=canvas.getContext('2d');ctx.drawImage(img,0,0,w,h);const regions=credibleRegions(m,e);
-  const generator=(m?.metadata?.generatorFingerprints||[]).length>0 || (m?.deepContainer?.container?.generatorMarkers||[]).length>0;
-  if(e.whole && (e.verified||generator || (e.score>=78&&e.agreement>=55))){ctx.fillStyle='rgba(255,220,72,.18)';ctx.fillRect(0,0,w,h);ctx.strokeStyle='rgba(236,176,0,.95)';ctx.lineWidth=Math.max(2,w/320);ctx.strokeRect(2,2,w-4,h-4);}
-  for(const r of regions){const x=r.x*w,y=r.y*h,rw=r.w*w,rh=r.h*h,a=Math.min(.28,.08+(Number(r.displayScore)||0)/650);ctx.fillStyle=`rgba(255,218,70,${a})`;ctx.fillRect(x,y,rw,rh);ctx.strokeStyle='rgba(226,158,0,.9)';ctx.lineWidth=Math.max(1.5,w/500);ctx.strokeRect(x+.5,y+.5,Math.max(1,rw-1),Math.max(1,rh-1));ctx.fillStyle='rgba(20,20,20,.86)';ctx.font=`600 ${Math.max(10,Math.round(w/55))}px Inter, sans-serif`;ctx.fillText(`${Math.round(r.displayScore)}`,x+6,Math.max(14,y+16));}
-}
-
-function renderImageResult(d){
-  if(d!==lastImageScan)return;const results=$('#results');if(!results)return;const e=estimateImage(d);results.innerHTML=panelHtml(d,e);const canvas=results.querySelector('.emetImageCanvas');if(selectedFile)drawMap(canvas,selectedFile,e,d.multimodal).catch(err=>console.warn('EMET image map:',err));results.scrollIntoView({behavior:'smooth',block:'start'});
-}
-})();
+function credibleRegions(m,e){if(e.verified||(e.whole&&e.lineage))return[];const raw=m?.visionFusion?.localization?.regions||[],gen=(m?.metadata?.generatorFingerprints||[]).length>0||(m?.deepContainer?.container?.generatorMarkers||[]).length>0,direct=gen||e.score>=95;if(!direct&&(Number(e.score)<45||Number(e.agreement)<35))return[];const core=new Set(['noise','flatNoise','cfa','channelResidual','jpegPhase','edgeNoise','laplacian','grid']);return raw.map(r=>{const dom=Array.isArray(r.dominant)?r.dominant:[],strong=dom.filter(x=>core.has(x.signal)&&Number(x.strength)>=1.35),veryStrong=dom.filter(x=>core.has(x.signal)&&Number(x.strength)>=2.0),required=e.score>=65?2:3;if(!direct&&(strong.length<required||Number(r.score)<(e.score>=65?65:75)))return null;if(!direct&&e.score<55&&veryStrong.length<2)return null;const localCorroboration=Math.max(Number(m?.recompression?.recompressionAnomalyScore||0),Number(m?.copyMove?.copyMoveSignal||0),Number(m?.visionFusion?.aiOriginEstimate?.boundaryAdhesion||0));let displayScore=Number(r.score)||0;if(!direct){const ceiling=Math.min(92,Math.round(Number(e.score)+18+Number(e.agreement)*.16+(localCorroboration>=60?8:0)));displayScore=Math.min(displayScore,ceiling);}return{...r,displayScore,forensicVotes:strong.length};}).filter(Boolean).sort((a,b)=>b.displayScore-a.displayScore).slice(0,10);}
+function panelHtml(d,e){const m=d.multimodal||{},vf=m.visionFusion||{},fp=(m?.metadata?.generatorFingerprints||[]).join(', '),name=selectedFile?.name||d?.file?.name||'Image',regions=credibleRegions(m,e),rawCount=vf?.localization?.regions?.length||0,p=e.pgt||{},pair=e.pair||{},lineageText=e.verified?'Exact SHA-256':e.lineage?(p.classification==='ai'?'Synthetic lineage':'Original lineage'):'No lineage decision';return `<section class="resultCard emetImageOriginPanel" data-image-origin-panel="1"><div class="emetImageHero"><div><div class="eyebrow">EMET VISION FUSION</div><h2>${esc(e.score)}% AI origin ${e.verified?'verified':'estimate'}</h2><p>${esc(e.label)} · confidence ${esc(e.confidence)}.</p></div><div class="emetImagePct">${esc(e.score)}<small>%</small></div></div><div class="emetImageStage"><canvas class="emetImageCanvas" aria-label="Image forensic localization map"></canvas><div class="emetLegend"><span><i class="whole"></i>whole-image synthetic signal</span><span><i class="local"></i>corroborated local AI/edit region</span></div></div><div class="emetImageSummary"><div><span>File</span><b>${esc(name)}</b></div><div><span>Evidence agreement</span><b>${esc(e.agreement??0)}/100</b></div><div><span>Lineage</span><b>${esc(lineageText)}</b></div><div><span>AI lineage similarity</span><b>${Number(p?.bestAI?.similarity)>0?Math.round(Number(p.bestAI.similarity)*100)+'/100':'N/A'}</b></div><div><span>Original lineage similarity</span><b>${Number(p?.bestHuman?.similarity)>0?Math.round(Number(p.bestHuman.similarity)*100)+'/100':'N/A'}</b></div><div><span>Pair contrast</span><b>${pair?.classification&&pair.classification!=='none'?esc(pair.classification)+' · '+Math.round(Number(pair.margin||0)*1000)/10+'%':'N/A'}</b></div><div><span>Corroborated regions</span><b>${regions.length}</b></div><div><span>Raw texture outliers rejected</span><b>${e.verified||(e.lineage&&e.whole)?rawCount:Math.max(0,rawCount-regions.length)}</b></div><div><span>Generator fingerprint</span><b>${fp?esc(fp):'None found'}</b></div><div><span>Camera evidence</span><b>${e.camera?esc(e.camera.score)+'/100':'N/A'}</b></div><div><span>Recompression</span><b>${m?.recompression?.supported?Math.round(Number(m.recompression.recompressionAnomalyScore||0))+'/100':'N/A'}</b></div></div>${e.reasons?.length?`<div class="whyBox"><b>${e.verified?'Verification evidence':'Signals contributing most'}</b>${e.reasons.slice(0,10).map(x=>`<span>${esc(x)}</span>`).join('')}</div>`:''}${regions.length?`<div class="whyBox"><b>Corroborated localized regions</b>${regions.slice(0,6).map((r,i)=>`<span>Region ${i+1}: ${Math.round(r.displayScore)}/100 · ${r.forensicVotes} independent forensic channels · ${(r.w*100).toFixed(1)}% × ${(r.h*100).toFixed(1)}% of image</span>`).join('')}</div>`:e.whole?`<div class="whyBox"><b>Whole-image synthetic classification</b><span>${e.verified?'The exact file is known AI ground truth.':'The image is classified as a whole-image synthetic lineage match, so isolated boxes would understate the result.'}</span></div>`:`<div class="whyBox"><b>No local region passed the corroboration gate</b><span>Natural texture changes are suppressed unless multiple forensic channels agree.</span></div>`}<details class="advanced"><summary>Advanced image evidence</summary><div class="detailList"><div><span>Vision engine</span><b>${esc(vf.version||'local baseline')}</b></div><div><span>Perceptual engine</span><b>${esc(p.version||'N/A')}</b></div><div><span>Pair engine</span><b>${esc(pair.version||'N/A')}</b></div><div><span>Known samples</span><b>${esc(p.knownSamples??'N/A')}</b></div><div><span>Dimensions</span><b>${esc(m?.dimensions?.width||'?')} × ${esc(m?.dimensions?.height||'?')}</b></div><div><span>Noise residual</span><b>${esc(vf?.globalForensics?.highPass??m?.pixelForensics?.noiseResidual??'N/A')}</b></div><div><span>Edge energy</span><b>${esc(vf?.globalForensics?.edge??m?.pixelForensics?.edgeEnergy??'N/A')}</b></div><div><span>Entropy</span><b>${esc(vf?.globalForensics?.entropy??m?.pixelForensics?.entropy??'N/A')}</b></div><div><span>Methods</span><b>${esc((vf.method||[]).join(' · '))}</b></div></div></details></section>`;}
+async function drawMap(canvas,file,e,m){if(!canvas||!file)return;if(lastUrl){try{URL.revokeObjectURL(lastUrl);}catch{}}lastUrl=URL.createObjectURL(file);const img=new Image();img.decoding='async';img.src=lastUrl;await img.decode();const max=720,scale=Math.min(1,max/Math.max(img.naturalWidth,img.naturalHeight)),w=Math.max(1,Math.round(img.naturalWidth*scale)),h=Math.max(1,Math.round(img.naturalHeight*scale));canvas.width=w;canvas.height=h;const ctx=canvas.getContext('2d');ctx.drawImage(img,0,0,w,h);const regions=credibleRegions(m,e),generator=(m?.metadata?.generatorFingerprints||[]).length>0||(m?.deepContainer?.container?.generatorMarkers||[]).length>0;if(e.whole&&(e.verified||e.lineage||generator||(e.score>=78&&e.agreement>=55))){ctx.fillStyle='rgba(255,220,72,.20)';ctx.fillRect(0,0,w,h);ctx.strokeStyle='rgba(236,176,0,.95)';ctx.lineWidth=Math.max(2,w/320);ctx.strokeRect(2,2,w-4,h-4);}for(const r of regions){const x=r.x*w,y=r.y*h,rw=r.w*w,rh=r.h*h,a=Math.min(.28,.08+(Number(r.displayScore)||0)/650);ctx.fillStyle=`rgba(255,218,70,${a})`;ctx.fillRect(x,y,rw,rh);ctx.strokeStyle='rgba(226,158,0,.9)';ctx.lineWidth=Math.max(1.5,w/500);ctx.strokeRect(x+.5,y+.5,Math.max(1,rw-1),Math.max(1,rh-1));ctx.fillStyle='rgba(20,20,20,.86)';ctx.font=`600 ${Math.max(10,Math.round(w/55))}px Inter, sans-serif`;ctx.fillText(`${Math.round(r.displayScore)}`,x+6,Math.max(14,y+16));}}
+function renderImageResult(d){if(d!==lastImageScan)return;const results=$('#results');if(!results)return;const e=estimateImage(d);results.innerHTML=panelHtml(d,e);const canvas=results.querySelector('.emetImageCanvas');if(selectedFile)drawMap(canvas,selectedFile,e,d.multimodal).catch(err=>console.warn('EMET image map:',err));results.scrollIntoView({behavior:'smooth',block:'start'});} })();
