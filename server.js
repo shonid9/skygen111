@@ -14,21 +14,15 @@ const { analyzeAdvancedImage } = require('./advanced-image-forensics');
 const { analyzeDeepContainer } = require('./deep-container-forensics');
 const { matchPerceptualGroundTruth } = require('./image-perceptual-ground-truth');
 const { installAdminApi } = require('./admin-api');
+const { requireUser, requireScanAccess, accountStatus } = require('./access-control');
 const app = express();
 const PORT = Number(process.env.PORT || 8080);
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024, files: 1 } });
 app.disable('x-powered-by');
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: false }));
-const daily = new Map();
-function rate(req,res,next){
-  const ip=(req.headers['x-forwarded-for']||req.socket.remoteAddress||'unknown').toString().split(',')[0].trim();
-  const day=new Date().toISOString().slice(0,10), key=day+':'+ip; const n=daily.get(key)||0;
-  if(n>=30) return res.status(429).json({error:'Daily demo scan limit reached for this network.'});
-  daily.set(key,n+1); res.setHeader('X-EMET-Demo-Remaining',String(29-n)); next();
-}
 const plans = [
-  {id:'free',name:'Free',price:0,period:'once',scans:1,maxMb:15,features:['1 full file scan','Deep metadata and structure view','Text style signals','No card required']},
+  {id:'free',name:'Free',price:0,period:'once',scans:1,maxMb:15,features:['1 full file scan','Deep metadata and structure view','Text style signals','Google sign-in required']},
   {id:'lite',name:'Lite',price:19,period:'month',scans:50,maxMb:25,features:['50 scans each month','DOCX, PDF, images, email, text and code','Revision and metadata forensics','Saved reports']},
   {id:'pro',name:'Pro',price:49,period:'month',scans:300,maxMb:50,features:['300 scans each month','Advanced provenance and contradiction signals','Batch comparison','Priority processing']},
   {id:'business',name:'Business',price:149,period:'month',scans:2000,maxMb:100,features:['2,000 scans each month','Team workspace','API access','Connected evidence sources','Audit export']}
@@ -70,7 +64,7 @@ function applyExactGroundTruth(aiAnalysis,match){
 }
 
 app.use('/api',(req,res,next)=>{res.setHeader('Cache-Control','no-store');next()});
-app.get('/api/health',(req,res)=>res.json({ok:true,service:'emet-one',version:'0.9.4',engine:VERSION,fingerprint:'EMET-FINGERPRINT-LAB-2026.09.12',authorshipMap:'EMET-AI-ORIGIN-MAP-2026.09.12.2',groundTruth:'EMET-GT-EXACT+PERCEPTUAL-2026.09.13',adminLab:'EMET-LAB-2026.09.12',multimodal:'EMET-MULTIMODAL-2026.09.13',imageMap:'EMET-IMAGE-MAP-2026.09.13',visionFusion:'EMET-VISION-FUSION-2026.09.13.3',deepLineage:'EMET-DEEP-LINEAGE-2026.09.13'}));
+app.get('/api/health',(req,res)=>res.json({ok:true,service:'emet-one',version:'0.9.5',engine:VERSION,fingerprint:'EMET-FINGERPRINT-LAB-2026.09.12',authorshipMap:'EMET-AI-ORIGIN-MAP-2026.09.12.2',groundTruth:'EMET-GT-EXACT+PERCEPTUAL-2026.09.13',adminLab:'EMET-LAB-2026.09.12',multimodal:'EMET-MULTIMODAL-2026.09.13',imageMap:'EMET-IMAGE-MAP-2026.09.13',visionFusion:'EMET-VISION-FUSION-2026.09.13.3',deepLineage:'EMET-DEEP-LINEAGE-2026.09.13',accessControl:'ACCOUNT-BOUND-SCAN-ENTITLEMENTS-2026.09.13'}));
 app.get('/api/engine',(req,res)=>res.json({
   engine:VERSION,
   textClassifier:{status:'not_configured',trained:false,validatedLanguages:[],calibratedProbabilityAvailable:false},
@@ -85,12 +79,13 @@ app.get('/api/config',(req,res)=>res.json({
   supabaseUrl:process.env.SUPABASE_URL||null,supabasePublishableKey:process.env.SUPABASE_PUBLISHABLE_KEY||null,
   billingConfigured:Boolean(process.env.STRIPE_SECRET_KEY && Object.values(priceIds).some(Boolean)),
   detectionProviders:{c2pa:true,localUltimateEnsemble:true,localFingerprintLab:true,localMultimodal:true,privateGroundTruth:true,perceptualGroundTruth:true,imageAttentionMap:true,visionFusion:true,deepContainerForensics:true},
-  textClassifier:{status:'not_configured',trained:false},freeScans:1,maxUploadMb:15
+  textClassifier:{status:'not_configured',trained:false},freeScans:1,maxUploadMb:15,freeScanRequiresAccount:true
 }));
+app.get('/api/account',requireUser,async(req,res)=>{try{res.json({user:{id:req.authUser.id,email:req.authUser.email},access:await accountStatus(req.authUser.id)})}catch(e){res.status(503).json({error:'Could not load account status.'})}});
 
 installAdminApi(app);
 
-app.post('/api/analyze', rate, upload.single('file'), async (req,res)=>{
+app.post('/api/analyze', requireScanAccess, upload.single('file'), async (req,res)=>{
   try{
     if(!req.file) return res.status(400).json({error:'Choose a file first.'});
     req.file.originalname=repairFilename(req.file.originalname);
@@ -137,15 +132,15 @@ app.post('/api/analyze', rate, upload.single('file'), async (req,res)=>{
     }
     applyExactGroundTruth(aiAnalysis,exactGroundTruth);
     if(aiAnalysis.assessment?.metadata)result.metadata={...result.metadata,...aiAnalysis.assessment.metadata};
-    res.json({...result,aiAnalysis,multimodal,deepForensics,groundTruth:exactGroundTruth,perceptualGroundTruth});
+    res.json({...result,aiAnalysis,multimodal,deepForensics,groundTruth:exactGroundTruth,perceptualGroundTruth,access:req.scanAccess});
   }catch(e){ console.error('File inspection failed:',e.message);res.status(e.statusCode||422).json({error:'File inspection could not complete.',detail:e.message,status:'failed'}); }
 });
-app.post('/api/analyze-text', rate, async (req,res)=>{
+app.post('/api/analyze-text', requireScanAccess, async (req,res)=>{
   try{
     const text=String(req.body?.text||'');if(text.trim().length<30)return res.status(400).json({error:'Paste at least 30 characters.'});
     if(text.length>250000)return res.status(413).json({error:'Text sample is too large for the demo.'});
     const [base,aiAnalysis]=await Promise.all([Promise.resolve(analyzeTextInput(text)),analyzeAIText(text)]);
-    res.json({...base,aiAnalysis,multimodal:{kind:'text',status:'not_applicable',reason:'Text-only input has no image, audio, video or document-container layer.'}});
+    res.json({...base,aiAnalysis,multimodal:{kind:'text',status:'not_applicable',reason:'Text-only input has no image, audio, video or document-container layer.'},access:req.scanAccess});
   }catch(e){console.error('Text inspection failed:',e.message);res.status(e.statusCode||422).json({error:'Text inspection could not complete.',detail:e.message,status:'failed'});}
 });
 app.post('/api/create-checkout-session', async (req,res)=>{
@@ -168,10 +163,10 @@ function htmlFor(file){
   if(!html.includes('/brand.css'))html=html.replace('</head>','<link rel="stylesheet" href="/brand.css"></head>');
   if(!html.includes('href="/pricing.html"')&&file!=='admin-lab.html')html=html.replace('</div><a class="navcta"','<a href="/pricing.html">Pricing</a></div><a class="navcta"');
   if(file==='verify.html'){
-    html=html.replace('</head>','<link rel="stylesheet" href="/review.css?v=20260913-5"></head>');
-    html=html.replace(/src="\/(app|fingerprint-ui|media-mode-fix|multimodal-ui|scanner)\.js(?:\?[^\"]*)?"/g,'src="/$1.js?v=20260913-5"');
-    html=html.replace(/href="\/(multimodal|media-mode-fix)\.css(?:\?[^\"]*)?"/g,'href="/$1.css?v=20260913-5"');
-    html=html.replace('</body>','<script src="/review-ui.js?v=20260913-5"></script></body>');
+    html=html.replace('</head>','<link rel="stylesheet" href="/review.css?v=20260913-6"></head>');
+    html=html.replace(/src="\/(app|fingerprint-ui|media-mode-fix|multimodal-ui|scanner)\.js(?:\?[^\"]*)?"/g,'src="/$1.js?v=20260913-6"');
+    html=html.replace(/href="\/(multimodal|media-mode-fix)\.css(?:\?[^\"]*)?"/g,'href="/$1.css?v=20260913-6"');
+    html=html.replace('</body>','<script src="/review-ui.js?v=20260913-6"></script></body>');
   }
   return html;
 }
