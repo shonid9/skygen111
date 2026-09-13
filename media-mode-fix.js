@@ -6,8 +6,44 @@ const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 function rememberFile(f){if(f&&IMAGE_RE.test(f.name||'')){selectedFile=f;window.__EMET_MEDIA_FILE=f;}else if(f){selectedFile=null;window.__EMET_MEDIA_FILE=null;}}
 document.addEventListener('change',e=>{if(e.target?.id==='fileInput')rememberFile(e.target.files?.[0]);},true);
 document.addEventListener('drop',e=>{const f=e.dataTransfer?.files?.[0];if(f)rememberFile(f);},true);
+
 const nativeFetch=window.fetch.bind(window);
-window.fetch=async function(input,init){const r=await nativeFetch(input,init);try{const u=typeof input==='string'?input:input?.url||'';if(u.includes('/api/analyze')&&!u.includes('/api/analyze-text')&&r.ok){const d=await r.clone().json();if(d?.multimodal?.kind==='image'){lastImageScan=d;window.__EMET_MEDIA_LAST_SCAN=d;window.__EMET_LAST_SCAN=null;const seq=++renderSeq;setTimeout(()=>{if(seq===renderSeq)renderImageResult(d);},40);}else window.__EMET_LAST_SCAN=d;}}catch(err){console.warn('EMET media UI hook:',err);}return r;};
+let authConfig=null,authClient=null,authScriptPromise=null;
+function loadSupabase(){
+ if(window.supabase)return Promise.resolve();
+ if(authScriptPromise)return authScriptPromise;
+ authScriptPromise=new Promise((resolve,reject)=>{const s=document.createElement('script');s.src='https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2';s.onload=resolve;s.onerror=()=>reject(new Error('Could not load secure sign-in.'));document.head.appendChild(s);});
+ return authScriptPromise;
+}
+async function getAccessToken(){
+ try{
+  if(!authConfig)authConfig=await nativeFetch('/api/config',{cache:'no-store'}).then(r=>r.json());
+  if(!authConfig?.googleAuthConfigured)return null;
+  await loadSupabase();
+  if(!authClient)authClient=window.supabase.createClient(authConfig.supabaseUrl,authConfig.supabasePublishableKey);
+  const {data}=await authClient.auth.getSession();return data?.session?.access_token||null;
+ }catch(e){console.warn('EMET auth:',e);return null;}
+}
+function authRedirect(){const next=encodeURIComponent(location.pathname+location.search);location.href=`/account.html?next=${next}`;}
+
+window.fetch=async function(input,init){
+ const u=typeof input==='string'?input:input?.url||'';
+ const isScan=u.includes('/api/analyze');
+ let nextInit=init||{};
+ if(isScan){
+  const token=await getAccessToken();
+  if(!token){authRedirect();return new Response(JSON.stringify({code:'AUTH_REQUIRED',error:'Sign in with Google to continue.'}),{status:401,headers:{'Content-Type':'application/json'}});}
+  const headers=new Headers(nextInit.headers||(input instanceof Request?input.headers:undefined));headers.set('Authorization',`Bearer ${token}`);nextInit={...nextInit,headers};
+ }
+ const r=await nativeFetch(input,nextInit);
+ try{
+  if(isScan&&r.status===401){authRedirect();return r;}
+  if(isScan&&r.status===402){setTimeout(()=>{location.href='/pricing.html?reason=limit';},250);return r;}
+  if(u.includes('/api/analyze')&&!u.includes('/api/analyze-text')&&r.ok){const d=await r.clone().json();if(d?.multimodal?.kind==='image'){lastImageScan=d;window.__EMET_MEDIA_LAST_SCAN=d;window.__EMET_LAST_SCAN=null;const seq=++renderSeq;setTimeout(()=>{if(seq===renderSeq)renderImageResult(d);},40);}else window.__EMET_LAST_SCAN=d;}
+ }catch(err){console.warn('EMET media UI hook:',err);}
+ return r;
+};
+
 function estimateImage(d){
  const m=d?.multimodal||{},gt=d?.groundTruth,pgt=d?.perceptualGroundTruth||m?.perceptualGroundTruth||null,pair=pgt?.pairContrast||null;
  if(gt?.matched&&gt?.label==='ai')return{score:100,confidence:'verified',label:'Verified AI origin · exact known ground truth',agreement:100,whole:true,verified:true,lineage:true,reasons:['Exact SHA-256 match to a user-confirmed fully AI-generated image.'],camera:null,pgt,pair};
