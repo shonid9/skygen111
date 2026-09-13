@@ -69,12 +69,12 @@ function applyExactGroundTruth(aiAnalysis,match){
 }
 
 app.use('/api',(req,res,next)=>{res.setHeader('Cache-Control','no-store');next()});
-app.get('/api/health',(req,res)=>res.json({ok:true,service:'emet-one',version:'0.9.0',engine:VERSION,fingerprint:'EMET-FINGERPRINT-LAB-2026.09.12',authorshipMap:'EMET-AI-ORIGIN-MAP-2026.09.12.2',groundTruth:'EMET-GT-EXACT-2026.09.12',adminLab:'EMET-LAB-2026.09.12',multimodal:'EMET-MULTIMODAL-2026.09.12'}));
+app.get('/api/health',(req,res)=>res.json({ok:true,service:'emet-one',version:'0.9.1',engine:VERSION,fingerprint:'EMET-FINGERPRINT-LAB-2026.09.12',authorshipMap:'EMET-AI-ORIGIN-MAP-2026.09.12.2',groundTruth:'EMET-GT-EXACT-2026.09.12',adminLab:'EMET-LAB-2026.09.12',multimodal:'EMET-MULTIMODAL-2026.09.13',imageMap:'EMET-IMAGE-MAP-2026.09.13'}));
 app.get('/api/engine',(req,res)=>res.json({
   engine:VERSION,
   textClassifier:{status:'not_configured',trained:false,validatedLanguages:[],calibratedProbabilityAvailable:false},
   localPanels:['Unicode word segmentation','contextual AI disclosures','assistant phrase locations','DOCX visible text mapping','DOCX run fingerprint','220–440 word authorship context windows','exact labeled-file SHA-256 recognition'],
-  forensicLayers:['OOXML metadata','tracked revisions','C2PA SDK validation states','PDF signature inspection','EXIF/XMP','pixel statistics','OCR','audio waveform baseline','video frame sampling'],
+  forensicLayers:['OOXML metadata','tracked revisions','C2PA SDK validation states','PDF signature inspection','EXIF/XMP','pixel statistics','OCR','audio waveform baseline','video frame sampling','image forensic attention map'],
   localBinaries:['tesseract','ffmpeg','ffprobe','pdfinfo','pdfsig','pdftotext','pdftoppm','qpdf'],
   principle:'Known labeled files are recognized exactly by hash. Unknown files use evidence fusion. Origin-map values are evidence scores, not generic calibrated AI probabilities.'
 }));
@@ -83,7 +83,7 @@ app.get('/api/config',(req,res)=>res.json({
   googleAuthConfigured:Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_PUBLISHABLE_KEY),
   supabaseUrl:process.env.SUPABASE_URL||null,supabasePublishableKey:process.env.SUPABASE_PUBLISHABLE_KEY||null,
   billingConfigured:Boolean(process.env.STRIPE_SECRET_KEY && Object.values(priceIds).some(Boolean)),
-  detectionProviders:{c2pa:true,localUltimateEnsemble:true,localFingerprintLab:true,localMultimodal:true,privateGroundTruth:true},
+  detectionProviders:{c2pa:true,localUltimateEnsemble:true,localFingerprintLab:true,localMultimodal:true,privateGroundTruth:true,imageAttentionMap:true},
   textClassifier:{status:'not_configured',trained:false},freeScans:1,maxUploadMb:15
 }));
 
@@ -137,18 +137,24 @@ function htmlFor(file){
   html=html.replace(/<img src="\/logo-emet-one\.svg" alt="EMET ONE"[^>]*>/g,'<img class="brandLogo" src="/logo-emet-one.svg" alt="EMET ONE">');
   if(!html.includes('/brand.css'))html=html.replace('</head>','<link rel="stylesheet" href="/brand.css"></head>');
   if(!html.includes('href="/pricing.html"')&&file!=='admin-lab.html')html=html.replace('</div><a class="navcta"','<a href="/pricing.html">Pricing</a></div><a class="navcta"');
-  if(file==='verify.html')html=html.replace('</head>','<link rel="stylesheet" href="/review.css?v=1"></head>').replace('</body>','<script src="/review-ui.js?v=1"></script></body>');
+  if(file==='verify.html'){
+    html=html.replace('</head>','<link rel="stylesheet" href="/review.css?v=20260913-2"></head>');
+    html=html.replace(/src="\/(app|fingerprint-ui|media-mode-fix|multimodal-ui|scanner)\.js(?:\?[^\"]*)?"/g,'src="/$1.js?v=20260913-2"');
+    html=html.replace(/href="\/(multimodal|media-mode-fix)\.css(?:\?[^\"]*)?"/g,'href="/$1.css?v=20260913-2"');
+    html=html.replace('</body>','<script src="/review-ui.js?v=20260913-2"></script></body>');
+  }
   return html;
 }
 app.use((req,res,next)=>{
   if(req.method!=='GET')return next();
   const f=req.path==='/'?'index.html':/^\/[a-z0-9_-]+\.html$/i.test(req.path)?path.basename(req.path):null;
-  if(!f)return next();const html=htmlFor(f);if(!html)return next();res.setHeader('Cache-Control','no-store');res.type('html').send(html);
+  if(!f)return next();const html=htmlFor(f);if(!html)return next();res.setHeader('Cache-Control','no-store, max-age=0');res.type('html').send(html);
 });
-const publicScripts=new Set(['app.js','scanner.js','fingerprint-ui.js','multimodal-ui.js','account.js','review-ui.js','admin-lab.js']);
+const publicScripts=new Set(['app.js','scanner.js','fingerprint-ui.js','multimodal-ui.js','media-mode-fix.js','account.js','review-ui.js','admin-lab.js']);
 app.use((req,res,next)=>{
   const ext=path.extname(req.path).toLowerCase();
   if(req.path.startsWith('/api/')||!(ext==='.js'?publicScripts.has(req.path.slice(1)):['.css','.svg','.png','.jpg','.jpeg','.webp','.ico','.html'].includes(ext)))return res.status(404).json({error:'Not found'});
+  if(['.js','.css'].includes(ext))res.setHeader('Cache-Control','no-cache, no-store, must-revalidate');
   next();
 });
 app.use(express.static(__dirname,{extensions:['html'],maxAge:'5m'}));
