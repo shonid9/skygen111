@@ -24,7 +24,10 @@ window.fetch=async function(input,init){
   return r;
 };
 
-function estimateImage(m){
+function estimateImage(d){
+  const m=d?.multimodal||{},gt=d?.groundTruth;
+  if(gt?.matched&&gt?.label==='ai')return{score:100,confidence:'verified',label:'Verified AI origin · exact known ground truth',agreement:100,whole:true,verified:true,reasons:['Exact SHA-256 match to a user-confirmed fully AI-generated image.'],camera:null};
+  if(gt?.matched&&gt?.label==='human')return{score:0,confidence:'verified',label:'Verified original/human source · exact known ground truth',agreement:100,whole:false,verified:true,reasons:['Exact SHA-256 match to a user-confirmed original image.'],camera:null};
   const vf=m?.visionFusion?.aiOriginEstimate;
   if(vf&&Number.isFinite(Number(vf.score))){
     const score=Math.max(0,Math.min(100,Number(vf.score))),confidence=vf.confidence||'unknown';
@@ -39,6 +42,7 @@ function estimateImage(m){
 }
 
 function credibleRegions(m,e){
+  if(e.verified)return[];
   const raw=m?.visionFusion?.localization?.regions||[];
   const gen=(m?.metadata?.generatorFingerprints||[]).length>0 || (m?.deepContainer?.container?.generatorMarkers||[]).length>0;
   const direct=gen || e.score>=95;
@@ -64,13 +68,13 @@ function credibleRegions(m,e){
 function panelHtml(d,e){
   const m=d.multimodal||{},vf=m.visionFusion||{},fp=(m?.metadata?.generatorFingerprints||[]).join(', '),name=selectedFile?.name||d?.file?.name||'Image',regions=credibleRegions(m,e),rawCount=vf?.localization?.regions?.length||0;
   return `<section class="resultCard emetImageOriginPanel" data-image-origin-panel="1">
-    <div class="emetImageHero"><div><div class="eyebrow">EMET VISION FUSION</div><h2>${esc(e.score)}% AI origin estimate</h2><p>${esc(e.label)} · confidence ${esc(e.confidence)}.</p></div><div class="emetImagePct">${esc(e.score)}<small>%</small></div></div>
+    <div class="emetImageHero"><div><div class="eyebrow">EMET VISION FUSION</div><h2>${esc(e.score)}% AI origin ${e.verified?'verified':'estimate'}</h2><p>${esc(e.label)} · confidence ${esc(e.confidence)}.</p></div><div class="emetImagePct">${esc(e.score)}<small>%</small></div></div>
     <div class="emetImageStage"><canvas class="emetImageCanvas" aria-label="Image forensic localization map"></canvas><div class="emetLegend"><span><i class="whole"></i>whole-image synthetic signal</span><span><i class="local"></i>corroborated local AI/edit region</span></div></div>
-    <div class="emetImageSummary"><div><span>File</span><b>${esc(name)}</b></div><div><span>Evidence agreement</span><b>${esc(e.agreement??0)}/100</b></div><div><span>Corroborated regions</span><b>${regions.length}</b></div><div><span>Raw texture outliers rejected</span><b>${Math.max(0,rawCount-regions.length)}</b></div><div><span>Generator fingerprint</span><b>${fp?esc(fp):'None found'}</b></div><div><span>Camera evidence</span><b>${e.camera?esc(e.camera.score)+'/100':'N/A'}</b></div><div><span>Recompression</span><b>${m?.recompression?.supported?Math.round(Number(m.recompression.recompressionAnomalyScore||0))+'/100':'N/A'}</b></div></div>
-    ${e.reasons?.length?`<div class="whyBox"><b>Signals contributing most</b>${e.reasons.slice(0,8).map(x=>`<span>${esc(x)}</span>`).join('')}</div>`:''}
-    ${regions.length?`<div class="whyBox"><b>Corroborated localized regions</b>${regions.slice(0,6).map((r,i)=>`<span>Region ${i+1}: ${Math.round(r.displayScore)}/100 · ${r.forensicVotes} independent forensic channels · ${(r.w*100).toFixed(1)}% × ${(r.h*100).toFixed(1)}% of image</span>`).join('')}</div>`:`<div class="whyBox"><b>No local region passed the corroboration gate</b><span>Natural texture changes such as fur, fabric, walls, shadows and object boundaries are suppressed unless multiple forensic channels agree.</span></div>`}
+    <div class="emetImageSummary"><div><span>File</span><b>${esc(name)}</b></div><div><span>Evidence agreement</span><b>${esc(e.agreement??0)}/100</b></div><div><span>Corroborated regions</span><b>${regions.length}</b></div><div><span>Raw texture outliers rejected</span><b>${e.verified?rawCount:Math.max(0,rawCount-regions.length)}</b></div><div><span>Generator fingerprint</span><b>${fp?esc(fp):'None found'}</b></div><div><span>Camera evidence</span><b>${e.camera?esc(e.camera.score)+'/100':'N/A'}</b></div><div><span>Recompression</span><b>${m?.recompression?.supported?Math.round(Number(m.recompression.recompressionAnomalyScore||0))+'/100':'N/A'}</b></div></div>
+    ${e.reasons?.length?`<div class="whyBox"><b>${e.verified?'Verification evidence':'Signals contributing most'}</b>${e.reasons.slice(0,8).map(x=>`<span>${esc(x)}</span>`).join('')}</div>`:''}
+    ${regions.length?`<div class="whyBox"><b>Corroborated localized regions</b>${regions.slice(0,6).map((r,i)=>`<span>Region ${i+1}: ${Math.round(r.displayScore)}/100 · ${r.forensicVotes} independent forensic channels · ${(r.w*100).toFixed(1)}% × ${(r.h*100).toFixed(1)}% of image</span>`).join('')}</div>`:e.verified&&e.whole?`<div class="whyBox"><b>Whole image verified as AI</b><span>The entire image is highlighted because the exact file is a known AI ground-truth sample. Local boxes would be misleading.</span></div>`:`<div class="whyBox"><b>No local region passed the corroboration gate</b><span>Natural texture changes are suppressed unless multiple forensic channels agree.</span></div>`}
     <details class="advanced"><summary>Advanced image evidence</summary><div class="detailList"><div><span>Vision engine</span><b>${esc(vf.version||'local baseline')}</b></div><div><span>Dimensions</span><b>${esc(m?.dimensions?.width||'?')} × ${esc(m?.dimensions?.height||'?')}</b></div><div><span>Noise residual</span><b>${esc(vf?.globalForensics?.highPass??m?.pixelForensics?.noiseResidual??'N/A')}</b></div><div><span>Edge energy</span><b>${esc(vf?.globalForensics?.edge??m?.pixelForensics?.edgeEnergy??'N/A')}</b></div><div><span>Entropy</span><b>${esc(vf?.globalForensics?.entropy??m?.pixelForensics?.entropy??'N/A')}</b></div><div><span>8px periodicity</span><b>${esc(vf?.globalForensics?.grid8??'N/A')}</b></div><div><span>Methods</span><b>${esc((vf.method||[]).join(' · '))}</b></div></div></details>
-    <p class="emetImageNote">Localization now uses a corroboration gate. A box is drawn only when several forensic residual channels agree with the document-wide origin evidence. Large visual texture differences alone are not enough.</p>
+    <p class="emetImageNote">EMET separates exact verification from statistical detection. Exact known AI files are marked across the whole image; unknown files use corroborated forensic localization.</p>
   </section>`;
 }
 
@@ -80,11 +84,11 @@ async function drawMap(canvas,file,e,m){
   const max=720,scale=Math.min(1,max/Math.max(img.naturalWidth,img.naturalHeight)),w=Math.max(1,Math.round(img.naturalWidth*scale)),h=Math.max(1,Math.round(img.naturalHeight*scale));canvas.width=w;canvas.height=h;
   const ctx=canvas.getContext('2d');ctx.drawImage(img,0,0,w,h);const regions=credibleRegions(m,e);
   const generator=(m?.metadata?.generatorFingerprints||[]).length>0 || (m?.deepContainer?.container?.generatorMarkers||[]).length>0;
-  if(e.whole && (generator || (e.score>=78&&e.agreement>=55))){ctx.fillStyle='rgba(255,220,72,.15)';ctx.fillRect(0,0,w,h);ctx.strokeStyle='rgba(236,176,0,.9)';ctx.lineWidth=Math.max(2,w/320);ctx.strokeRect(2,2,w-4,h-4);}
+  if(e.whole && (e.verified||generator || (e.score>=78&&e.agreement>=55))){ctx.fillStyle='rgba(255,220,72,.18)';ctx.fillRect(0,0,w,h);ctx.strokeStyle='rgba(236,176,0,.95)';ctx.lineWidth=Math.max(2,w/320);ctx.strokeRect(2,2,w-4,h-4);}
   for(const r of regions){const x=r.x*w,y=r.y*h,rw=r.w*w,rh=r.h*h,a=Math.min(.28,.08+(Number(r.displayScore)||0)/650);ctx.fillStyle=`rgba(255,218,70,${a})`;ctx.fillRect(x,y,rw,rh);ctx.strokeStyle='rgba(226,158,0,.9)';ctx.lineWidth=Math.max(1.5,w/500);ctx.strokeRect(x+.5,y+.5,Math.max(1,rw-1),Math.max(1,rh-1));ctx.fillStyle='rgba(20,20,20,.86)';ctx.font=`600 ${Math.max(10,Math.round(w/55))}px Inter, sans-serif`;ctx.fillText(`${Math.round(r.displayScore)}`,x+6,Math.max(14,y+16));}
 }
 
 function renderImageResult(d){
-  if(d!==lastImageScan)return;const results=$('#results');if(!results)return;const e=estimateImage(d.multimodal);results.innerHTML=panelHtml(d,e);const canvas=results.querySelector('.emetImageCanvas');if(selectedFile)drawMap(canvas,selectedFile,e,d.multimodal).catch(err=>console.warn('EMET image map:',err));results.scrollIntoView({behavior:'smooth',block:'start'});
+  if(d!==lastImageScan)return;const results=$('#results');if(!results)return;const e=estimateImage(d);results.innerHTML=panelHtml(d,e);const canvas=results.querySelector('.emetImageCanvas');if(selectedFile)drawMap(canvas,selectedFile,e,d.multimodal).catch(err=>console.warn('EMET image map:',err));results.scrollIntoView({behavior:'smooth',block:'start'});
 }
 })();
