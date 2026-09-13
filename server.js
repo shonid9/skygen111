@@ -10,6 +10,7 @@ const { validateArchive, repairFilename } = require('./evidence-document');
 const { analyzeFingerprintFile } = require('./fingerprint-lab');
 const { buildAuthorshipMap } = require('./authorship-map');
 const { analyzeMultimodal } = require('./multimodal-engine');
+const { analyzeAdvancedImage } = require('./advanced-image-forensics');
 const { installAdminApi } = require('./admin-api');
 const app = express();
 const PORT = Number(process.env.PORT || 8080);
@@ -69,12 +70,12 @@ function applyExactGroundTruth(aiAnalysis,match){
 }
 
 app.use('/api',(req,res,next)=>{res.setHeader('Cache-Control','no-store');next()});
-app.get('/api/health',(req,res)=>res.json({ok:true,service:'emet-one',version:'0.9.1',engine:VERSION,fingerprint:'EMET-FINGERPRINT-LAB-2026.09.12',authorshipMap:'EMET-AI-ORIGIN-MAP-2026.09.12.2',groundTruth:'EMET-GT-EXACT-2026.09.12',adminLab:'EMET-LAB-2026.09.12',multimodal:'EMET-MULTIMODAL-2026.09.13',imageMap:'EMET-IMAGE-MAP-2026.09.13'}));
+app.get('/api/health',(req,res)=>res.json({ok:true,service:'emet-one',version:'0.9.2',engine:VERSION,fingerprint:'EMET-FINGERPRINT-LAB-2026.09.12',authorshipMap:'EMET-AI-ORIGIN-MAP-2026.09.12.2',groundTruth:'EMET-GT-EXACT-2026.09.12',adminLab:'EMET-LAB-2026.09.12',multimodal:'EMET-MULTIMODAL-2026.09.13',imageMap:'EMET-IMAGE-MAP-2026.09.13',visionFusion:'EMET-VISION-FUSION-2026.09.13'}));
 app.get('/api/engine',(req,res)=>res.json({
   engine:VERSION,
   textClassifier:{status:'not_configured',trained:false,validatedLanguages:[],calibratedProbabilityAvailable:false},
   localPanels:['Unicode word segmentation','contextual AI disclosures','assistant phrase locations','DOCX visible text mapping','DOCX run fingerprint','220–440 word authorship context windows','exact labeled-file SHA-256 recognition'],
-  forensicLayers:['OOXML metadata','tracked revisions','C2PA SDK validation states','PDF signature inspection','EXIF/XMP','pixel statistics','OCR','audio waveform baseline','video frame sampling','image forensic attention map'],
+  forensicLayers:['OOXML metadata','tracked revisions','C2PA SDK validation states','PDF signature inspection','EXIF/XMP','pixel statistics','OCR','audio waveform baseline','video frame sampling','image forensic attention map','multi-scale image residual fusion','camera-capture evidence','regional image localization'],
   localBinaries:['tesseract','ffmpeg','ffprobe','pdfinfo','pdfsig','pdftotext','pdftoppm','qpdf'],
   principle:'Known labeled files are recognized exactly by hash. Unknown files use evidence fusion. Origin-map values are evidence scores, not generic calibrated AI probabilities.'
 }));
@@ -83,7 +84,7 @@ app.get('/api/config',(req,res)=>res.json({
   googleAuthConfigured:Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_PUBLISHABLE_KEY),
   supabaseUrl:process.env.SUPABASE_URL||null,supabasePublishableKey:process.env.SUPABASE_PUBLISHABLE_KEY||null,
   billingConfigured:Boolean(process.env.STRIPE_SECRET_KEY && Object.values(priceIds).some(Boolean)),
-  detectionProviders:{c2pa:true,localUltimateEnsemble:true,localFingerprintLab:true,localMultimodal:true,privateGroundTruth:true,imageAttentionMap:true},
+  detectionProviders:{c2pa:true,localUltimateEnsemble:true,localFingerprintLab:true,localMultimodal:true,privateGroundTruth:true,imageAttentionMap:true,visionFusion:true},
   textClassifier:{status:'not_configured',trained:false},freeScans:1,maxUploadMb:15
 }));
 
@@ -94,6 +95,7 @@ app.post('/api/analyze', rate, upload.single('file'), async (req,res)=>{
     if(!req.file) return res.status(400).json({error:'Choose a file first.'});
     req.file.originalname=repairFilename(req.file.originalname);
     const ext=path.extname(req.file.originalname).toLowerCase();
+    const isImage=['.jpg','.jpeg','.png','.webp','.tif','.tiff'].includes(ext);
     if(['.docx','.docm','.xlsx','.xlsm','.pptx','.pptm'].includes(ext))validateArchive(req.file.buffer);
     const [result, aiAnalysis, fingerprintLab, multimodal, exactGroundTruth] = await Promise.all([
       analyzeFile(req.file), analyzeAIFile(req.file),
@@ -101,6 +103,9 @@ app.post('/api/analyze', rate, upload.single('file'), async (req,res)=>{
       analyzeMultimodal(req.file).catch(e=>({status:'failed',error:e.message})),
       lookupExactGroundTruth(req.file.buffer)
     ]);
+    if(isImage && multimodal?.kind==='image'){
+      try{multimodal.visionFusion=await analyzeAdvancedImage(req.file.buffer,multimodal);}catch(e){multimodal.visionFusion={status:'failed',error:e.message};}
+    }
     aiAnalysis.fingerprintLab=fingerprintLab;
     if(['.docx','.docm'].includes(ext)){
       try{aiAnalysis.assessment.authorshipMap=buildAuthorshipMap(req.file,aiAnalysis,fingerprintLab);}catch(e){aiAnalysis.assessment.authorshipMap={supported:false,status:'failed',error:e.message};}
@@ -138,10 +143,10 @@ function htmlFor(file){
   if(!html.includes('/brand.css'))html=html.replace('</head>','<link rel="stylesheet" href="/brand.css"></head>');
   if(!html.includes('href="/pricing.html"')&&file!=='admin-lab.html')html=html.replace('</div><a class="navcta"','<a href="/pricing.html">Pricing</a></div><a class="navcta"');
   if(file==='verify.html'){
-    html=html.replace('</head>','<link rel="stylesheet" href="/review.css?v=20260913-2"></head>');
-    html=html.replace(/src="\/(app|fingerprint-ui|media-mode-fix|multimodal-ui|scanner)\.js(?:\?[^\"]*)?"/g,'src="/$1.js?v=20260913-2"');
-    html=html.replace(/href="\/(multimodal|media-mode-fix)\.css(?:\?[^\"]*)?"/g,'href="/$1.css?v=20260913-2"');
-    html=html.replace('</body>','<script src="/review-ui.js?v=20260913-2"></script></body>');
+    html=html.replace('</head>','<link rel="stylesheet" href="/review.css?v=20260913-3"></head>');
+    html=html.replace(/src="\/(app|fingerprint-ui|media-mode-fix|multimodal-ui|scanner)\.js(?:\?[^\"]*)?"/g,'src="/$1.js?v=20260913-3"');
+    html=html.replace(/href="\/(multimodal|media-mode-fix)\.css(?:\?[^\"]*)?"/g,'href="/$1.css?v=20260913-3"');
+    html=html.replace('</body>','<script src="/review-ui.js?v=20260913-3"></script></body>');
   }
   return html;
 }
