@@ -12,6 +12,7 @@ const { buildAuthorshipMap } = require('./authorship-map');
 const { analyzeMultimodal } = require('./multimodal-engine');
 const { analyzeAdvancedImage } = require('./advanced-image-forensics');
 const { analyzeDeepContainer } = require('./deep-container-forensics');
+const { matchPerceptualGroundTruth } = require('./image-perceptual-ground-truth');
 const { installAdminApi } = require('./admin-api');
 const app = express();
 const PORT = Number(process.env.PORT || 8080);
@@ -61,9 +62,7 @@ function applyExactGroundTruth(aiAnalysis,match){
     m.documentSignalScore=100;
     m.method='exact SHA-256 match to a user-confirmed AI ground-truth file; paragraph map below remains diagnostic';
     for(const item of m.items||[]){
-      item.groundTruth='ai';
-      item.label='strong_ai_signal';
-      item.score=100;
+      item.groundTruth='ai'; item.label='strong_ai_signal'; item.score=100;
       item.explanation='This exact file matches a user-confirmed AI ground-truth sample by SHA-256. The 100 score here is recognition of the labeled file, not a generic AI-detector probability.';
     }
     m.counts={strongAI:(m.items||[]).length,likelyAI:0,humanEditCandidates:0,mixed:0,low:0};
@@ -71,21 +70,21 @@ function applyExactGroundTruth(aiAnalysis,match){
 }
 
 app.use('/api',(req,res,next)=>{res.setHeader('Cache-Control','no-store');next()});
-app.get('/api/health',(req,res)=>res.json({ok:true,service:'emet-one',version:'0.9.3',engine:VERSION,fingerprint:'EMET-FINGERPRINT-LAB-2026.09.12',authorshipMap:'EMET-AI-ORIGIN-MAP-2026.09.12.2',groundTruth:'EMET-GT-EXACT-2026.09.12',adminLab:'EMET-LAB-2026.09.12',multimodal:'EMET-MULTIMODAL-2026.09.13',imageMap:'EMET-IMAGE-MAP-2026.09.13',visionFusion:'EMET-VISION-FUSION-2026.09.13',deepLineage:'EMET-DEEP-LINEAGE-2026.09.13'}));
+app.get('/api/health',(req,res)=>res.json({ok:true,service:'emet-one',version:'0.9.4',engine:VERSION,fingerprint:'EMET-FINGERPRINT-LAB-2026.09.12',authorshipMap:'EMET-AI-ORIGIN-MAP-2026.09.12.2',groundTruth:'EMET-GT-EXACT+PERCEPTUAL-2026.09.13',adminLab:'EMET-LAB-2026.09.12',multimodal:'EMET-MULTIMODAL-2026.09.13',imageMap:'EMET-IMAGE-MAP-2026.09.13',visionFusion:'EMET-VISION-FUSION-2026.09.13.3',deepLineage:'EMET-DEEP-LINEAGE-2026.09.13'}));
 app.get('/api/engine',(req,res)=>res.json({
   engine:VERSION,
   textClassifier:{status:'not_configured',trained:false,validatedLanguages:[],calibratedProbabilityAvailable:false},
-  localPanels:['Unicode word segmentation','contextual AI disclosures','assistant phrase locations','DOCX visible text mapping','DOCX run fingerprint','220–440 word authorship context windows','exact labeled-file SHA-256 recognition'],
-  forensicLayers:['OOXML metadata','tracked revisions','C2PA SDK validation states','PDF signature inspection','EXIF/XMP','pixel statistics','OCR','audio waveform baseline','video frame sampling','image forensic attention map','multi-scale image residual fusion','camera-capture evidence','regional image localization','JPEG marker and quantization-table inspection','PNG chunk history','OOXML package timestamp lineage','Word paraId/textId/session lineage','revision author/date graph','embedded object and external relationship inventory'],
+  localPanels:['Unicode word segmentation','contextual AI disclosures','assistant phrase locations','DOCX visible text mapping','DOCX run fingerprint','220–440 word authorship context windows','exact labeled-file SHA-256 recognition','perceptual image ground-truth lineage matching'],
+  forensicLayers:['OOXML metadata','tracked revisions','C2PA SDK validation states','PDF signature inspection','EXIF/XMP','pixel statistics','OCR','audio waveform baseline','video frame sampling','image forensic attention map','multi-scale image residual fusion','camera-capture evidence','regional image localization','JPEG marker and quantization-table inspection','PNG chunk history','OOXML package timestamp lineage','Word paraId/textId/session lineage','revision author/date graph','embedded object and external relationship inventory','aHash+dHash near-duplicate lineage recognition'],
   localBinaries:['tesseract','ffmpeg','ffprobe','pdfinfo','pdfsig','pdftotext','pdftoppm','qpdf'],
-  principle:'Known labeled files are recognized exactly by hash. Unknown files use evidence fusion. Origin-map values are evidence scores, not generic calibrated AI probabilities.'
+  principle:'Exact known files are verified by SHA-256. Re-encoded/resized variants can inherit evidence from perceptual ground-truth lineage when both perceptual hashes and aspect geometry agree. Unknown files use evidence fusion.'
 }));
 app.get('/api/plans',(req,res)=>res.json({currency:'USD',plans}));
 app.get('/api/config',(req,res)=>res.json({
   googleAuthConfigured:Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_PUBLISHABLE_KEY),
   supabaseUrl:process.env.SUPABASE_URL||null,supabasePublishableKey:process.env.SUPABASE_PUBLISHABLE_KEY||null,
   billingConfigured:Boolean(process.env.STRIPE_SECRET_KEY && Object.values(priceIds).some(Boolean)),
-  detectionProviders:{c2pa:true,localUltimateEnsemble:true,localFingerprintLab:true,localMultimodal:true,privateGroundTruth:true,imageAttentionMap:true,visionFusion:true,deepContainerForensics:true},
+  detectionProviders:{c2pa:true,localUltimateEnsemble:true,localFingerprintLab:true,localMultimodal:true,privateGroundTruth:true,perceptualGroundTruth:true,imageAttentionMap:true,visionFusion:true,deepContainerForensics:true},
   textClassifier:{status:'not_configured',trained:false},freeScans:1,maxUploadMb:15
 }));
 
@@ -98,21 +97,36 @@ app.post('/api/analyze', rate, upload.single('file'), async (req,res)=>{
     const ext=path.extname(req.file.originalname).toLowerCase();
     const isImage=['.jpg','.jpeg','.png','.webp','.tif','.tiff'].includes(ext);
     if(['.docx','.docm','.xlsx','.xlsm','.pptx','.pptm'].includes(ext))validateArchive(req.file.buffer);
-    const [result, aiAnalysis, fingerprintLab, multimodal, exactGroundTruth, deepForensics] = await Promise.all([
+    const [result, aiAnalysis, fingerprintLab, multimodal, exactGroundTruth, deepForensics, perceptualGroundTruth] = await Promise.all([
       analyzeFile(req.file), analyzeAIFile(req.file),
       Promise.resolve().then(()=>analyzeFingerprintFile(req.file)).catch(e=>({supported:false,status:'failed',error:e.message})),
       analyzeMultimodal(req.file).catch(e=>({status:'failed',error:e.message})),
       lookupExactGroundTruth(req.file.buffer),
-      Promise.resolve().then(()=>analyzeDeepContainer(req.file)).catch(e=>({kind:'deep_forensics',status:'failed',error:e.message}))
+      Promise.resolve().then(()=>analyzeDeepContainer(req.file)).catch(e=>({kind:'deep_forensics',status:'failed',error:e.message})),
+      isImage?matchPerceptualGroundTruth(req.file.buffer).catch(e=>({version:'EMET-PERCEPTUAL-GT-2026.09.13',status:'failed',error:e.message})):Promise.resolve(null)
     ]);
     if(isImage && multimodal?.kind==='image'){
       try{multimodal.visionFusion=await analyzeAdvancedImage(req.file.buffer,multimodal);}catch(e){multimodal.visionFusion={status:'failed',error:e.message};}
       multimodal.deepContainer=deepForensics;
+      multimodal.perceptualGroundTruth=perceptualGroundTruth;
       const deepMarkers=deepForensics?.container?.generatorMarkers||[];
       if(deepMarkers.length&&multimodal.visionFusion?.aiOriginEstimate){
         multimodal.visionFusion.aiOriginEstimate.score=Math.max(98,Number(multimodal.visionFusion.aiOriginEstimate.score)||0);
         multimodal.visionFusion.aiOriginEstimate.confidence='very high';
         multimodal.visionFusion.aiOriginEstimate.signals=[...(multimodal.visionFusion.aiOriginEstimate.signals||[]),{id:'container_generator_marker',score:100,weight:.35,kind:'origin',markers:deepMarkers}];
+      }
+      if(!exactGroundTruth?.matched&&perceptualGroundTruth?.classification==='ai'&&perceptualGroundTruth?.bestAI?.similarity>=.90&&multimodal.visionFusion?.aiOriginEstimate){
+        const p=perceptualGroundTruth;
+        const boosted=Math.round(82+(Math.min(1,p.bestAI.similarity)-.90)*140+Math.max(0,p.contrastMargin-.045)*120);
+        multimodal.visionFusion.aiOriginEstimate.score=Math.max(Number(multimodal.visionFusion.aiOriginEstimate.score)||0,Math.min(98,boosted));
+        multimodal.visionFusion.aiOriginEstimate.confidence='high';
+        multimodal.visionFusion.aiOriginEstimate.signals=[...(multimodal.visionFusion.aiOriginEstimate.signals||[]),{id:'perceptual_ground_truth_lineage',score:Math.round(p.bestAI.similarity*100),weight:.34,kind:'origin',margin:p.contrastMargin}];
+      }
+      if(!exactGroundTruth?.matched&&perceptualGroundTruth?.classification==='human'&&perceptualGroundTruth?.bestHuman?.similarity>=.90&&multimodal.visionFusion?.aiOriginEstimate){
+        const p=perceptualGroundTruth;
+        multimodal.visionFusion.aiOriginEstimate.score=Math.min(Number(multimodal.visionFusion.aiOriginEstimate.score)||100,Math.max(1,Math.round((1-p.bestHuman.similarity)*100+6)));
+        multimodal.visionFusion.aiOriginEstimate.confidence='high';
+        multimodal.visionFusion.aiOriginEstimate.signals=[...(multimodal.visionFusion.aiOriginEstimate.signals||[]),{id:'perceptual_original_lineage',score:Math.round(p.bestHuman.similarity*100),weight:.34,kind:'counter',margin:p.contrastMargin}];
       }
     }
     aiAnalysis.fingerprintLab=fingerprintLab;
@@ -123,7 +137,7 @@ app.post('/api/analyze', rate, upload.single('file'), async (req,res)=>{
     }
     applyExactGroundTruth(aiAnalysis,exactGroundTruth);
     if(aiAnalysis.assessment?.metadata)result.metadata={...result.metadata,...aiAnalysis.assessment.metadata};
-    res.json({...result,aiAnalysis,multimodal,deepForensics,groundTruth:exactGroundTruth});
+    res.json({...result,aiAnalysis,multimodal,deepForensics,groundTruth:exactGroundTruth,perceptualGroundTruth});
   }catch(e){ console.error('File inspection failed:',e.message);res.status(e.statusCode||422).json({error:'File inspection could not complete.',detail:e.message,status:'failed'}); }
 });
 app.post('/api/analyze-text', rate, async (req,res)=>{
@@ -154,10 +168,10 @@ function htmlFor(file){
   if(!html.includes('/brand.css'))html=html.replace('</head>','<link rel="stylesheet" href="/brand.css"></head>');
   if(!html.includes('href="/pricing.html"')&&file!=='admin-lab.html')html=html.replace('</div><a class="navcta"','<a href="/pricing.html">Pricing</a></div><a class="navcta"');
   if(file==='verify.html'){
-    html=html.replace('</head>','<link rel="stylesheet" href="/review.css?v=20260913-4"></head>');
-    html=html.replace(/src="\/(app|fingerprint-ui|media-mode-fix|multimodal-ui|scanner)\.js(?:\?[^\"]*)?"/g,'src="/$1.js?v=20260913-4"');
-    html=html.replace(/href="\/(multimodal|media-mode-fix)\.css(?:\?[^\"]*)?"/g,'href="/$1.css?v=20260913-4"');
-    html=html.replace('</body>','<script src="/review-ui.js?v=20260913-4"></script></body>');
+    html=html.replace('</head>','<link rel="stylesheet" href="/review.css?v=20260913-5"></head>');
+    html=html.replace(/src="\/(app|fingerprint-ui|media-mode-fix|multimodal-ui|scanner)\.js(?:\?[^\"]*)?"/g,'src="/$1.js?v=20260913-5"');
+    html=html.replace(/href="\/(multimodal|media-mode-fix)\.css(?:\?[^\"]*)?"/g,'href="/$1.css?v=20260913-5"');
+    html=html.replace('</body>','<script src="/review-ui.js?v=20260913-5"></script></body>');
   }
   return html;
 }
