@@ -14,6 +14,15 @@ async function supabaseUser(req){
   }catch{return null}
 }
 
+function isVerifiedGoogleUser(user){
+  if(!user?.id||!user?.email)return false;
+  const meta=user.app_metadata||{};
+  const providers=Array.isArray(meta.providers)?meta.providers:[];
+  const google=meta.provider==='google'||providers.includes('google');
+  const verified=Boolean(user.email_confirmed_at||user.confirmed_at||user.user_metadata?.email_verified);
+  return google&&verified;
+}
+
 async function rpc(name,body){
   if(!configured())throw new Error('Account entitlement database is not configured.');
   const r=await fetch(`${process.env.SUPABASE_URL}/rest/v1/rpc/${name}`,{
@@ -34,6 +43,7 @@ async function requireUser(req,res,next){
 async function requireScanAccess(req,res,next){
   const user=await supabaseUser(req);
   if(!user)return res.status(401).json({code:'AUTH_REQUIRED',error:'Sign in with Google to use your free scan or paid plan.'});
+  if(!isVerifiedGoogleUser(user))return res.status(403).json({code:'GOOGLE_ACCOUNT_REQUIRED',error:'A verified Google account is required to scan.'});
   try{
     const access=await rpc('consume_scan_access_internal',{p_user_id:user.id});
     if(!access?.allowed){
@@ -56,4 +66,4 @@ async function applyBillingState({userId,plan,status,customerId,subscriptionId,e
   return rpc('apply_billing_state_internal',{p_user_id:userId,p_plan:plan,p_status:status,p_customer_id:customerId||null,p_subscription_id:subscriptionId||null,p_provider_event_id:eventId||null,p_payload:payload||{}})
 }
 
-module.exports={LIMITS,configured,supabaseUser,requireUser,requireScanAccess,accountStatus,applyBillingState};
+module.exports={LIMITS,configured,supabaseUser,isVerifiedGoogleUser,requireUser,requireScanAccess,accountStatus,applyBillingState};
