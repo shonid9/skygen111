@@ -16,7 +16,7 @@ async function supabaseUser(req){
 }
 
 function isVerifiedGoogleUser(user){
-  if(!user?.id||!user?.email)return false;
+  if(!user?.id||!user?.email||user?.is_anonymous===true)return false;
   const meta=user.app_metadata||{};
   const providers=Array.isArray(meta.providers)?meta.providers:[];
   const google=meta.provider==='google'||providers.includes('google');
@@ -54,14 +54,13 @@ async function requireUser(req,res,next){
 async function requireScanAccess(req,res,next){
   const user=await supabaseUser(req);
   if(!user)return res.status(401).json({code:'AUTH_REQUIRED',error:'Sign in with Google to use your free scan or paid plan.'});
-  if(!isVerifiedGoogleUser(user))return res.status(403).json({code:'GOOGLE_ACCOUNT_REQUIRED',error:'A verified Google account is required to scan.'});
+  if(!isVerifiedGoogleUser(user))return res.status(403).json({code:'GOOGLE_ACCOUNT_REQUIRED',error:'A verified, non-anonymous Google account is required to scan.'});
   try{
     const access=await rpc('consume_scan_access_v2_internal',{p_user_id:user.id,p_fingerprint:clientFingerprint(req)});
     if(!access?.allowed){
-      let msg='Your subscription is not active. Choose a plan to continue.';
-      if(access?.reason==='scan_limit_reached')msg='Your included scans are used up. Choose a plan to continue.';
-      if(access?.reason==='trial_abuse_guard')msg='This device or network has already claimed several free trials. Choose a plan to continue.';
-      if(access?.reason==='trial_identity_unavailable')msg='We could not verify this free-trial request. Sign in again or choose a plan.';
+      if(access?.reason==='trial_abuse_guard')return res.status(429).json({code:'TRIAL_ABUSE_GUARD',error:'The free trial has already been claimed by several accounts from this environment. Choose a plan to continue.',access});
+      if(access?.reason==='trial_identity_unavailable')return res.status(403).json({code:'TRIAL_IDENTITY_UNAVAILABLE',error:'We could not securely bind this free trial to the current environment. Sign in again or choose a plan.',access});
+      const msg=access?.reason==='scan_limit_reached'?'Your included scans are used up. Choose a plan to continue.':'Your subscription is not active. Choose a plan to continue.';
       return res.status(402).json({code:'PLAN_REQUIRED',error:msg,access});
     }
     req.authUser=user;req.scanAccess=access;
