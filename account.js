@@ -11,17 +11,24 @@
     if(!session?.access_token)return null;
     try{const r=await fetch('/api/account',{headers:{Authorization:`Bearer ${session.access_token}`},cache:'no-store'});if(!r.ok)return null;return r.json()}catch{return null}
   }
+  function syncBillingButton(){
+    if(!buyBtn)return;
+    if(plan==='free'||!['lite','pro','business'].includes(plan)){buyBtn.hidden=true;return}
+    buyBtn.hidden=false;buyBtn.textContent=`Continue with ${plan.toUpperCase()}`;
+    if(config?.billingConfigured===false){buyBtn.disabled=true;buyBtn.textContent='Payments are being connected'}
+  }
   async function signedIn(u){
     user=u;if(btn){btn.textContent=u.email||'Signed in';btn.disabled=true}
     const data=await loadAccount(),a=data?.access||{},remaining=Number(a.remaining??0),currentPlan=String(a.plan||'free');
-    if(plan==='free'||!['lite','pro','business'].includes(plan)){if(buyBtn)buyBtn.hidden=true}else if(buyBtn){buyBtn.hidden=false;buyBtn.textContent=`Continue with ${plan.toUpperCase()}`}
+    syncBillingButton();
     if(currentPlan==='free'&&remaining>0)say(`Signed in as ${u.email}. Your one free scan is ready.`);
+    else if(currentPlan==='free'&&config?.billingConfigured===false)say(`Signed in as ${u.email}. Your free scan has already been used. Paid checkout is not live yet.`);
     else if(currentPlan==='free')say(`Signed in as ${u.email}. Your free scan has already been used. Choose a plan to continue.`);
     else say(`Signed in as ${u.email}. ${currentPlan.toUpperCase()} has ${remaining} scans remaining this period.`);
   }
   async function init(){
     try{
-      config=await fetch('/api/config',{cache:'no-store'}).then(r=>r.json());
+      config=await fetch('/api/config',{cache:'no-store'}).then(r=>r.json());syncBillingButton();
       if(!window.supabase||!config.supabaseUrl||!config.supabasePublishableKey)throw new Error('Account service unavailable');
       sb=window.supabase.createClient(config.supabaseUrl,config.supabasePublishableKey);
       googleEnabled=await providerEnabled();
@@ -38,6 +45,7 @@
     try{const {error}=await sb.auth.signInWithOAuth({provider:'google',options:{redirectTo:location.origin+'/account.html?plan='+encodeURIComponent(plan)}});if(error)throw error}catch(e){say(e.message,'error')}
   });
   buyBtn?.addEventListener('click',async()=>{
+    if(config?.billingConfigured===false){say('Payments are not connected to production yet.','error');return}
     if(!session?.access_token){say('Sign in with Google first.');return}
     try{
       buyBtn.disabled=true;
