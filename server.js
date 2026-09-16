@@ -301,8 +301,10 @@ app.post('/api/create-portal-session',requireUser,async(req,res)=>{
 function htmlFor(file){
   const full=path.join(__dirname,file);if(!fs.existsSync(full))return null;
   let html=fs.readFileSync(full,'utf8');
-  html=html.replace(/<span class="mark">E1<\/span>/g,'<img class="brandLogo" src="/logo-emet-one.svg" alt="EMET ONE">');
-  html=html.replace(/<img src="\/logo-emet-one\.svg" alt="EMET ONE"[^>]*>/g,'<img class="brandLogo" src="/logo-emet-one.svg" alt="EMET ONE">');
+  const brandMark='<img class="brandLogo" src="/logo-emet-one.svg" alt="EMET ONE" width="46" height="36" decoding="async">';
+  html=html.replace(/<span class="mark">E1<\/span>/g,brandMark);
+  html=html.replace(/<img (?:class="brandLogo" )?src="\/logo-emet-one\.svg" alt="EMET ONE"[^>]*>/g,brandMark);
+  if(!html.includes('rel="icon"'))html=html.replace('</head>','<link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="apple-touch-icon" href="/apple-touch-icon.png"></head>');
   if(!html.includes('/brand.css'))html=html.replace('</head>','<link rel="stylesheet" href="/brand.css"></head>');
   if(!html.includes('href="/pricing.html"')&&file!=='admin-lab.html')html=html.replace('</div><a class="navcta"','<a href="/pricing.html">Pricing</a></div><a class="navcta"');
   if(file==='verify.html'){

@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="EMET ONE">
+  <title>EMET ONE</title>
+  <defs>
+    <linearGradient id="fvTile" x1="0" y1="0" x2=".7" y2="1">
+      <stop offset="0" stop-color="#232933"/>
+      <stop offset=".55" stop-color="#11151b"/>
+      <stop offset="1" stop-color="#05070b"/>
+    </linearGradient>
+    <linearGradient id="fvArm" x1="0" y1="0" x2=".3" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset=".55" stop-color="#dfe4ee"/>
+      <stop offset="1" stop-color="#aeb7c6"/>
+    </linearGradient>
+    <linearGradient id="fvSweep" gradientUnits="userSpaceOnUse" x1="40" y1="640" x2="800" y2="200">
+      <stop offset="0" stop-color="#d8deea"/>
+      <stop offset=".34" stop-color="#b9c5dc"/>
+      <stop offset=".5" stop-color="#3f7df5"/>
+      <stop offset=".72" stop-color="#1657ee"/>
+      <stop offset="1" stop-color="#2f7bff"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#fvTile)"/>
+  <g transform="translate(9.9 14.7) scale(.0512)" fill-rule="evenodd">
+    <path d="M74 84 L562 60 C578 59 586 68 582 82 L560 160 C556 174 544 180 528 180 L74 200 C46 201 30 190 32 168 C34 140 44 108 56 94 C62 87 68 84 74 84 Z" fill="url(#fvArm)"/>
+    <path d="M56 310 L544 286 C560 285 568 294 564 308 L542 386 C538 400 526 406 510 406 L56 426 C28 427 12 416 14 394 C16 366 26 334 38 320 C44 313 50 310 56 310 Z" fill="url(#fvArm)"/>
+    <path d="M812 8 C844 6 862 26 862 58 L862 468 C862 566 798 642 700 652 L74 668 C36 669 4 648 6 616 C8 580 34 552 78 546 L596 526 C652 522 678 492 678 430 L678 180 C674 156 654 142 626 128 C698 106 762 56 812 8 Z" fill="url(#fvSweep)"/>
+  </g>
+</svg>
