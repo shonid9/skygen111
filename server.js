@@ -306,6 +306,7 @@ function htmlFor(file){
   html=html.replace(/<img (?:class="brandLogo" )?src="\/logo-emet-one\.(?:svg|png)" alt="EMET ONE"[^>]*>/g,brandMark);
   if(!html.includes('rel="icon"'))html=html.replace('</head>','<link rel="icon" href="/favicon.png" type="image/png" sizes="64x64"><link rel="apple-touch-icon" href="/apple-touch-icon.png"></head>');
   if(!html.includes('/brand.css'))html=html.replace('</head>','<link rel="stylesheet" href="/brand.css"></head>');
+  if(!html.includes('/nav-mobile.css'))html=html.replace('</head>','<link rel="stylesheet" href="/nav-mobile.css"></head>');
   if(!html.includes('href="/pricing.html"')&&file!=='admin-lab.html')html=html.replace('</div><a class="navcta"','<a href="/pricing.html">Pricing</a></div><a class="navcta"');
   if(file==='verify.html'){
     html=html.replace('</head>','<link rel="stylesheet" href="/review.css?v=20260913-6"></head>');
