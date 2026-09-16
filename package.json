@@ -8,14 +8,13 @@
   "engines": {"node": ">=22"},
   "dependencies": {
     "@contentauth/c2pa-node": "^0.9.4",
-    "@xmldom/xmldom": "0.9.10",
-    "adm-zip": "^0.5.16",
+    "@xmldom/xmldom": "0.9.12",
+    "adm-zip": "0.6.1",
     "exifreader": "^4.26.2",
     "express": "^4.21.2",
-    "fast-xml-parser": "^4.5.1",
-    "multer": "^1.4.5-lts.1",
+    "multer": "2.4.0",
     "pdf-parse": "^1.1.1",
-    "sharp": "^0.34.3",
+    "sharp": "0.35.4",
     "stripe": "^17.7.0"
   }
 }

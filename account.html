@@ -1,1 +1,43 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#f6f3ec"><title>Account | EMET ONE</title><meta name="description" content="Sign in to EMET ONE and manage your verification plan."><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet"><link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/saas.css"></head><body><nav class="nav"><div class="wrap navin"><a class="brand" href="/index.html"><img class="brandLogo" src="/logo-emet-one.svg" alt="EMET ONE"><span><strong>EMET ONE</strong><small>VERIFICATION INTELLIGENCE</small></span></a><div class="links"><a href="/verify.html">Verify</a><a href="/pricing.html">Pricing</a><a href="/how.html">How it works</a></div><a class="navcta" href="/verify.html">Verify ↗</a><button class="mobileBtn" type="button">Menu</button></div></nav><div class="mobilePanel"><a href="/verify.html">Verify anything</a><a href="/pricing.html">Pricing</a><a href="/how.html">How it works</a></div><main><div class="accountWrap"><section class="accountCard"><div class="eyebrow">ACCOUNT</div><h1 style="font-size:clamp(44px,8vw,76px);line-height:.9;letter-spacing:-.065em;margin:20px 0 14px">Your evidence.<br>Your account.</h1><p class="sectionLead" style="margin:0 0 24px">Continue with Google. Every new account receives one full forensic scan. After that, scanning requires an active plan.</p><div class="planBar"><span>Selected plan</span><b id="selectedPlan">PRO</b></div><button class="googleBtn" id="googleBtn" type="button">Continue with Google</button><button class="btn dark" id="buyBtn" type="button" style="width:100%;margin-top:12px" hidden>Continue to secure checkout</button><div class="notice" id="accountMsg">Checking account services…</div><div style="margin-top:24px;padding-top:20px;border-top:1px solid var(--line)"><div class="eyebrow">ONE FREE SCAN PER ACCOUNT</div><p class="sectionLead" style="margin:10px 0 0">The free scan is tied to your authenticated account, not to a browser or network. Signing out, clearing cookies or changing IP does not reset it.</p><a class="btn soft" href="/pricing.html" style="margin-top:14px">Compare plans</a></div></section></div></main><footer class="footer"><div class="wrap foot"><span>© 2026 EMET ONE</span><span>SECURE AUTH · ACCOUNT-BASED USAGE</span></div></footer><script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script><script src="/app.js"></script><script src="/account.js"></script></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#f6f3ec">
+  <title>Account | EMET ONE</title>
+  <meta name="description" content="Sign in to EMET ONE and manage your verification plan.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/saas.css">
+</head>
+<body>
+  <nav class="nav"><div class="wrap navin"><a class="brand" href="/index.html"><img class="brandLogo" src="/logo-emet-one.svg" alt="EMET ONE"><span><strong>EMET ONE</strong><small>VERIFICATION INTELLIGENCE</small></span></a><div class="links"><a href="/verify.html">Verify</a><a href="/pricing.html">Pricing</a><a href="/how.html">How it works</a></div><a class="navcta" href="/verify.html">Verify ↗</a><button class="mobileBtn" type="button">Menu</button></div></nav>
+  <div class="mobilePanel"><a href="/verify.html">Verify anything</a><a href="/pricing.html">Pricing</a><a href="/how.html">How it works</a></div>
+  <main><div class="accountWrap"><section class="accountCard">
+    <div class="eyebrow">ACCOUNT</div>
+    <h1 style="font-size:clamp(44px,8vw,76px);line-height:.9;letter-spacing:-.065em;margin:20px 0 14px">Your evidence.<br>Your account.</h1>
+    <p class="sectionLead" style="margin:0 0 24px">Continue with Google. Every new account receives one full forensic scan. After that, scanning requires an active plan.</p>
+    <div class="planBar"><span>Selected plan</span><b id="selectedPlan">PRO</b></div>
+    <button class="googleBtn" id="googleBtn" type="button">Continue with Google</button>
+    <div class="accountActions">
+      <button class="btn dark" id="buyBtn" type="button" hidden>Continue to secure checkout</button>
+      <button class="btn soft" id="portalBtn" type="button" hidden>Manage billing</button>
+      <button class="btn soft" id="signOutBtn" type="button" hidden>Sign out</button>
+    </div>
+    <div class="notice" id="accountMsg">Checking account services…</div>
+    <section class="scanHistory" id="scanHistory" hidden>
+      <div class="historyHead"><div><div class="eyebrow">RECENT SCANS</div><h2>Your saved activity</h2></div><a class="btn soft" href="/verify.html">New scan</a></div>
+      <div id="scanRows" class="scanRows"></div>
+    </section>
+    <div style="margin-top:24px;padding-top:20px;border-top:1px solid var(--line)">
+      <div class="eyebrow">ONE FREE SCAN PER ACCOUNT</div>
+      <p class="sectionLead" style="margin:10px 0 0">The free scan is tied to your authenticated account, not to a browser or network. Signing out, clearing cookies or changing IP does not reset it.</p>
+      <a class="btn soft" href="/pricing.html" style="margin-top:14px">Compare plans</a>
+    </div>
+  </section></div></main>
+  <footer class="footer"><div class="wrap foot"><span>© 2026 EMET ONE</span><span>SECURE AUTH · ACCOUNT-BASED USAGE</span></div></footer>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script><script src="/app.js"></script><script src="/account.js"></script>
+</body>
+</html>

@@ -5,12 +5,17 @@ const LIMITS={free:1,lite:50,pro:300,business:2000};
 
 function configured(){return Boolean(process.env.SUPABASE_URL&&process.env.SUPABASE_PUBLISHABLE_KEY&&process.env.EMET_INTERNAL_DB_TOKEN)}
 
+function bearerToken(req){
+  const auth=String(req.headers.authorization||'');
+  const match=auth.match(/^Bearer\s+(.+)$/i);
+  return match?.[1]||null;
+}
+
 async function supabaseUser(req){
   if(!process.env.SUPABASE_URL||!process.env.SUPABASE_PUBLISHABLE_KEY)return null;
-  const auth=String(req.headers.authorization||'');
-  const m=auth.match(/^Bearer\s+(.+)$/i);if(!m)return null;
+  const token=bearerToken(req);if(!token)return null;
   try{
-    const r=await fetch(`${process.env.SUPABASE_URL}/auth/v1/user`,{headers:{apikey:process.env.SUPABASE_PUBLISHABLE_KEY,authorization:`Bearer ${m[1]}`}});
+    const r=await fetch(`${process.env.SUPABASE_URL}/auth/v1/user`,{headers:{apikey:process.env.SUPABASE_PUBLISHABLE_KEY,authorization:`Bearer ${token}`}});
     if(!r.ok)return null;const u=await r.json();return u?.id?u:null;
   }catch{return null}
 }
@@ -34,12 +39,12 @@ function clientFingerprint(req){
   return crypto.createHmac('sha256',process.env.EMET_INTERNAL_DB_TOKEN).update(`${ip}\n${ua}\n${lang}`).digest('hex');
 }
 
-async function rpc(name,body){
-  if(!configured())throw new Error('Account entitlement database is not configured.');
+async function userRpc(name,body,accessToken){
+  if(!process.env.SUPABASE_URL||!process.env.SUPABASE_PUBLISHABLE_KEY||!accessToken)throw new Error('Account entitlement database is not configured.');
   const r=await fetch(`${process.env.SUPABASE_URL}/rest/v1/rpc/${name}`,{
     method:'POST',
-    headers:{'content-type':'application/json',apikey:process.env.SUPABASE_PUBLISHABLE_KEY,authorization:`Bearer ${process.env.SUPABASE_PUBLISHABLE_KEY}`},
-    body:JSON.stringify({...body,p_token:process.env.EMET_INTERNAL_DB_TOKEN})
+    headers:{'content-type':'application/json',apikey:process.env.SUPABASE_PUBLISHABLE_KEY,authorization:`Bearer ${accessToken}`},
+    body:JSON.stringify(body||{})
   });
   if(!r.ok)throw new Error(`Entitlement RPC ${name} failed (${r.status}).`);
   return r.json();
@@ -48,7 +53,7 @@ async function rpc(name,body){
 async function requireUser(req,res,next){
   const user=await supabaseUser(req);
   if(!user)return res.status(401).json({code:'AUTH_REQUIRED',error:'Sign in with Google to continue.'});
-  req.authUser=user;next();
+  req.authUser=user;req.authToken=bearerToken(req);next();
 }
 
 async function requireScanAccess(req,res,next){
@@ -56,14 +61,15 @@ async function requireScanAccess(req,res,next){
   if(!user)return res.status(401).json({code:'AUTH_REQUIRED',error:'Sign in with Google to use your free scan or paid plan.'});
   if(!isVerifiedGoogleUser(user))return res.status(403).json({code:'GOOGLE_ACCOUNT_REQUIRED',error:'A verified, non-anonymous Google account is required to scan.'});
   try{
-    const access=await rpc('consume_scan_access_v2_internal',{p_user_id:user.id,p_fingerprint:clientFingerprint(req)});
+    const token=bearerToken(req);
+    const access=await userRpc('consume_scan_access_v3',{p_fingerprint:clientFingerprint(req)},token);
     if(!access?.allowed){
       if(access?.reason==='trial_abuse_guard')return res.status(429).json({code:'TRIAL_ABUSE_GUARD',error:'The free trial has already been claimed by several accounts from this environment. Choose a plan to continue.',access});
       if(access?.reason==='trial_identity_unavailable')return res.status(403).json({code:'TRIAL_IDENTITY_UNAVAILABLE',error:'We could not securely bind this free trial to the current environment. Sign in again or choose a plan.',access});
       const msg=access?.reason==='scan_limit_reached'?'Your included scans are used up. Choose a plan to continue.':'Your subscription is not active. Choose a plan to continue.';
       return res.status(402).json({code:'PLAN_REQUIRED',error:msg,access});
     }
-    req.authUser=user;req.scanAccess=access;
+    req.authUser=user;req.authToken=token;req.scanAccess=access;
     res.setHeader('X-EMET-Plan',String(access.plan||'free'));
     res.setHeader('X-EMET-Scans-Remaining',String(access.remaining??0));
     next();
@@ -73,10 +79,6 @@ async function requireScanAccess(req,res,next){
   }
 }
 
-async function accountStatus(userId){return rpc('get_scan_access_internal',{p_user_id:userId})}
+async function accountStatus(accessToken){return userRpc('get_scan_access_v3',{},accessToken)}
 
-async function applyBillingState({userId,plan,status,customerId,subscriptionId,eventId,payload}){
-  return rpc('apply_billing_state_internal',{p_user_id:userId,p_plan:plan,p_status:status,p_customer_id:customerId||null,p_subscription_id:subscriptionId||null,p_provider_event_id:eventId||null,p_payload:payload||{}})
-}
-
-module.exports={LIMITS,configured,supabaseUser,isVerifiedGoogleUser,clientFingerprint,requireUser,requireScanAccess,accountStatus,applyBillingState};
+module.exports={LIMITS,configured,bearerToken,supabaseUser,isVerifiedGoogleUser,clientFingerprint,requireUser,requireScanAccess,accountStatus,userRpc};

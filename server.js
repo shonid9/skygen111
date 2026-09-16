@@ -19,6 +19,7 @@ const app = express();
 const PORT = Number(process.env.PORT || 8080);
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024, files: 1 } });
 app.disable('x-powered-by');
+app.post('/api/stripe-webhook',express.raw({type:'application/json',limit:'1mb'}),stripeWebhookHandler);
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: false }));
 const plans = [
@@ -28,14 +29,104 @@ const plans = [
   {id:'business',name:'Business',price:149,period:'month',scans:2000,maxMb:100,features:['2,000 scans each month','Team workspace','API access','Connected evidence sources','Audit export']}
 ];
 const priceIds = {lite:process.env.STRIPE_PRICE_LITE,pro:process.env.STRIPE_PRICE_PRO,business:process.env.STRIPE_PRICE_BUSINESS};
+const priceToPlan=()=>Object.fromEntries(Object.entries(priceIds).filter(([,id])=>id).map(([plan,id])=>[id,plan]));
+
+function serviceRoleConfigured(){return Boolean(process.env.SUPABASE_URL&&process.env.SUPABASE_SERVICE_ROLE_KEY)}
+
+async function supabaseAdmin(pathname,{method='GET',body,headers={}}={}){
+  if(!serviceRoleConfigured())throw new Error('Supabase server credentials are not configured.');
+  const r=await fetch(`${process.env.SUPABASE_URL}${pathname}`,{
+    method,
+    headers:{apikey:process.env.SUPABASE_SERVICE_ROLE_KEY,authorization:`Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,...(body?{'content-type':'application/json'}:{}),...headers},
+    body:body===undefined?undefined:JSON.stringify(body)
+  });
+  const text=await r.text();
+  if(!r.ok)throw new Error(`Supabase request failed (${r.status}): ${text.slice(0,300)}`);
+  return text?JSON.parse(text):null;
+}
+
+async function persistScan(user,file,result){
+  if(!user?.id||!process.env.SUPABASE_URL||!process.env.SUPABASE_SERVICE_ROLE_KEY)return;
+  const row={
+    user_id:user.id,
+    filename:file.originalname,
+    mime_type:file.mimetype||null,
+    size_bytes:file.size,
+    sha256:result?.file?.sha256||crypto.createHash('sha256').update(file.buffer).digest('hex'),
+    engine:VERSION,
+    risk_score:Number(result?.summary?.riskScore??result?.aiAnalysis?.final?.score??0)||null,
+    ai_style_score:Number(result?.aiAnalysis?.local?.ensemble?.score??result?.aiAnalysis?.local?.style?.localScore??0)||null,
+    summary:result?.summary||{},
+    findings:Array.isArray(result?.findings)?result.findings:[],
+    metadata:result?.metadata||{}
+  };
+  await supabaseAdmin('/rest/v1/scans',{method:'POST',body:row,headers:{prefer:'return=minimal'}});
+}
+
+function safeStoragePath(userId,objectPath){
+  const value=String(objectPath||'');
+  if(!value||value.includes('..')||value.startsWith('/')||!value.startsWith(`${userId}/`))return null;
+  return value;
+}
+
+function encodeStoragePath(value){return value.split('/').map(encodeURIComponent).join('/')}
+
+async function downloadPrivateUpload(userId,accessToken,objectPath,originalName,mimeType){
+  const safePath=safeStoragePath(userId,objectPath);
+  if(!safePath)throw Object.assign(new Error('Invalid upload path.'),{statusCode:400});
+  const r=await fetch(`${process.env.SUPABASE_URL}/storage/v1/object/authenticated/scan-files/${encodeStoragePath(safePath)}`,{
+    headers:{apikey:process.env.SUPABASE_PUBLISHABLE_KEY,authorization:`Bearer ${accessToken}`}
+  });
+  if(!r.ok)throw Object.assign(new Error(`Private upload could not be read (${r.status}).`),{statusCode:r.status===404?404:502});
+  const length=Number(r.headers.get('content-length')||0),maxMb=plans.find(p=>p.id==='business')?.maxMb||100;
+  if(length>maxMb*1024*1024)throw Object.assign(new Error('The upload exceeds the maximum file size.'),{statusCode:413});
+  const buffer=Buffer.from(await r.arrayBuffer());
+  return {buffer,size:buffer.length,originalname:repairFilename(String(originalName||path.basename(safePath))),mimetype:String(mimeType||r.headers.get('content-type')||'application/octet-stream')};
+}
+
+async function deletePrivateUpload(accessToken,objectPath){
+  try{
+    await fetch(`${process.env.SUPABASE_URL}/storage/v1/object/scan-files`,{
+      method:'DELETE',headers:{'content-type':'application/json',apikey:process.env.SUPABASE_PUBLISHABLE_KEY,authorization:`Bearer ${accessToken}`},body:JSON.stringify({prefixes:[objectPath]})
+    });
+  }catch{}
+}
+
+async function stripeWebhookHandler(req,res){
+  if(!process.env.STRIPE_SECRET_KEY||!process.env.STRIPE_WEBHOOK_SECRET||!serviceRoleConfigured())return res.status(503).send('Billing is not configured.');
+  const stripe=new Stripe(process.env.STRIPE_SECRET_KEY);
+  let event;
+  try{event=stripe.webhooks.constructEvent(req.body,req.headers['stripe-signature'],process.env.STRIPE_WEBHOOK_SECRET)}
+  catch(e){return res.status(400).send(`Invalid webhook: ${e.message}`)}
+  try{
+    const object=event.data.object||{};
+    let subscription=object,customerId=String(object.customer||''),subscriptionId=String(object.id||''),status=String(object.status||'');
+    if(event.type==='checkout.session.completed'){
+      subscriptionId=String(object.subscription||'');customerId=String(object.customer||'');status='active';
+      if(subscriptionId)subscription=await stripe.subscriptions.retrieve(subscriptionId);
+    }
+    if(!['checkout.session.completed','customer.subscription.created','customer.subscription.updated','customer.subscription.deleted','invoice.paid','invoice.payment_failed'].includes(event.type))return res.json({received:true});
+    if(event.type.startsWith('invoice.')){
+      subscriptionId=String(object.subscription||'');customerId=String(object.customer||'');
+      if(subscriptionId)subscription=await stripe.subscriptions.retrieve(subscriptionId);
+      status=event.type==='invoice.payment_failed'?'past_due':String(subscription.status||'active');
+    }
+    const userId=String(subscription.metadata?.supabase_user_id||object.metadata?.supabase_user_id||object.client_reference_id||'');
+    const priceId=subscription.items?.data?.[0]?.price?.id||object.metadata?.price_id;
+    const plan=priceToPlan()[priceId]||String(subscription.metadata?.plan||object.metadata?.plan||'free');
+    if(!userId)throw new Error('Webhook is missing the Supabase user id.');
+    await supabaseAdmin('/rest/v1/rpc/apply_billing_state_internal',{method:'POST',body:{p_user_id:userId,p_plan:plan,p_status:status||'inactive',p_customer_id:customerId||null,p_subscription_id:subscriptionId||null,p_provider_event_id:event.id,p_payload:{type:event.type,created:event.created},p_token:process.env.EMET_INTERNAL_DB_TOKEN}});
+    res.json({received:true});
+  }catch(e){console.error('Stripe webhook failed:',e.message);res.status(500).send('Webhook processing failed.');}
+}
 
 async function lookupExactGroundTruth(buffer){
-  if(!process.env.SUPABASE_URL||!process.env.SUPABASE_PUBLISHABLE_KEY||!process.env.EMET_INTERNAL_DB_TOKEN)return null;
+  if(!process.env.SUPABASE_URL||!process.env.SUPABASE_SERVICE_ROLE_KEY||!process.env.EMET_INTERNAL_DB_TOKEN)return null;
   const sha256=crypto.createHash('sha256').update(buffer).digest('hex');
   try{
     const r=await fetch(`${process.env.SUPABASE_URL}/rest/v1/rpc/lookup_ground_truth_sha_internal`,{
       method:'POST',
-      headers:{'content-type':'application/json','apikey':process.env.SUPABASE_PUBLISHABLE_KEY,'authorization':`Bearer ${process.env.SUPABASE_PUBLISHABLE_KEY}`},
+      headers:{'content-type':'application/json','apikey':process.env.SUPABASE_SERVICE_ROLE_KEY,'authorization':`Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`},
       body:JSON.stringify({p_sha256:sha256,p_token:process.env.EMET_INTERNAL_DB_TOKEN})
     });
     if(!r.ok)return {sha256,matched:false};
@@ -75,33 +166,38 @@ app.get('/api/engine',(req,res)=>res.json({
 }));
 app.get('/api/plans',(req,res)=>res.json({currency:'USD',plans}));
 app.get('/api/config',(req,res)=>res.json({
-  googleAuthConfigured:Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_PUBLISHABLE_KEY),
+  googleAuthConfigured:process.env.GOOGLE_AUTH_ENABLED==='true',
   supabaseUrl:process.env.SUPABASE_URL||null,supabasePublishableKey:process.env.SUPABASE_PUBLISHABLE_KEY||null,
-  billingConfigured:Boolean(process.env.STRIPE_SECRET_KEY && Object.values(priceIds).some(Boolean)),
+  billingConfigured:Boolean(process.env.STRIPE_SECRET_KEY&&process.env.STRIPE_WEBHOOK_SECRET&&serviceRoleConfigured()&&Object.values(priceIds).every(Boolean)),
   detectionProviders:{c2pa:true,localUltimateEnsemble:true,localFingerprintLab:true,localMultimodal:true,privateGroundTruth:true,perceptualGroundTruth:true,imageAttentionMap:true,visionFusion:true,deepContainerForensics:true},
   textClassifier:{status:'not_configured',trained:false},freeScans:1,maxUploadMb:15,freeScanRequiresAccount:true
 }));
-app.get('/api/account',requireUser,async(req,res)=>{try{res.json({user:{id:req.authUser.id,email:req.authUser.email},access:await accountStatus(req.authUser.id)})}catch(e){res.status(503).json({error:'Could not load account status.'})}});
+app.get('/api/account',requireUser,async(req,res)=>{try{res.json({user:{id:req.authUser.id,email:req.authUser.email},access:await accountStatus(req.authToken)})}catch(e){res.status(503).json({error:'Could not load account status.'})}});
+app.get('/api/scans',requireUser,async(req,res)=>{
+  try{
+    const rows=await supabaseAdmin(`/rest/v1/scans?user_id=eq.${encodeURIComponent(req.authUser.id)}&select=id,filename,mime_type,size_bytes,risk_score,engine,created_at&order=created_at.desc&limit=25`);
+    res.json({scans:Array.isArray(rows)?rows:[]});
+  }catch(e){console.error('Scan history load failed:',e.message);res.status(503).json({error:'Could not load scan history.'});}
+});
 
 installAdminApi(app);
 
-app.post('/api/analyze', requireScanAccess, upload.single('file'), async (req,res)=>{
-  try{
-    if(!req.file) return res.status(400).json({error:'Choose a file first.'});
-    req.file.originalname=repairFilename(req.file.originalname);
-    const ext=path.extname(req.file.originalname).toLowerCase();
+async function analyzeUploadedFile(file){
+    if(!file)throw Object.assign(new Error('Choose a file first.'),{statusCode:400});
+    file.originalname=repairFilename(file.originalname);
+    const ext=path.extname(file.originalname).toLowerCase();
     const isImage=['.jpg','.jpeg','.png','.webp','.tif','.tiff'].includes(ext);
-    if(['.docx','.docm','.xlsx','.xlsm','.pptx','.pptm'].includes(ext))validateArchive(req.file.buffer);
+    if(['.docx','.docm','.xlsx','.xlsm','.pptx','.pptm'].includes(ext))validateArchive(file.buffer);
     const [result, aiAnalysis, fingerprintLab, multimodal, exactGroundTruth, deepForensics, perceptualGroundTruth] = await Promise.all([
-      analyzeFile(req.file), analyzeAIFile(req.file),
-      Promise.resolve().then(()=>analyzeFingerprintFile(req.file)).catch(e=>({supported:false,status:'failed',error:e.message})),
-      analyzeMultimodal(req.file).catch(e=>({status:'failed',error:e.message})),
-      lookupExactGroundTruth(req.file.buffer),
-      Promise.resolve().then(()=>analyzeDeepContainer(req.file)).catch(e=>({kind:'deep_forensics',status:'failed',error:e.message})),
-      isImage?matchPerceptualGroundTruth(req.file.buffer).catch(e=>({version:'EMET-PERCEPTUAL-GT-2026.09.13',status:'failed',error:e.message})):Promise.resolve(null)
+      analyzeFile(file), analyzeAIFile(file),
+      Promise.resolve().then(()=>analyzeFingerprintFile(file)).catch(e=>({supported:false,status:'failed',error:e.message})),
+      analyzeMultimodal(file).catch(e=>({status:'failed',error:e.message})),
+      lookupExactGroundTruth(file.buffer),
+      Promise.resolve().then(()=>analyzeDeepContainer(file)).catch(e=>({kind:'deep_forensics',status:'failed',error:e.message})),
+      isImage?matchPerceptualGroundTruth(file.buffer).catch(e=>({version:'EMET-PERCEPTUAL-GT-2026.09.13',status:'failed',error:e.message})):Promise.resolve(null)
     ]);
     if(isImage && multimodal?.kind==='image'){
-      try{multimodal.visionFusion=await analyzeAdvancedImage(req.file.buffer,multimodal);}catch(e){multimodal.visionFusion={status:'failed',error:e.message};}
+      try{multimodal.visionFusion=await analyzeAdvancedImage(file.buffer,multimodal);}catch(e){multimodal.visionFusion={status:'failed',error:e.message};}
       multimodal.deepContainer=deepForensics;
       multimodal.perceptualGroundTruth=perceptualGroundTruth;
       const deepMarkers=deepForensics?.container?.generatorMarkers||[];
@@ -127,13 +223,37 @@ app.post('/api/analyze', requireScanAccess, upload.single('file'), async (req,re
     aiAnalysis.fingerprintLab=fingerprintLab;
     aiAnalysis.deepForensics=deepForensics;
     if(['.docx','.docm'].includes(ext)){
-      try{aiAnalysis.assessment.authorshipMap=buildAuthorshipMap(req.file,aiAnalysis,fingerprintLab);}catch(e){aiAnalysis.assessment.authorshipMap={supported:false,status:'failed',error:e.message};}
+      try{aiAnalysis.assessment.authorshipMap=buildAuthorshipMap(file,aiAnalysis,fingerprintLab);}catch(e){aiAnalysis.assessment.authorshipMap={supported:false,status:'failed',error:e.message};}
       if(deepForensics?.kind==='docx_lineage') aiAnalysis.assessment.deepLineage=deepForensics;
     }
     applyExactGroundTruth(aiAnalysis,exactGroundTruth);
     if(aiAnalysis.assessment?.metadata)result.metadata={...result.metadata,...aiAnalysis.assessment.metadata};
-    res.json({...result,aiAnalysis,multimodal,deepForensics,groundTruth:exactGroundTruth,perceptualGroundTruth,access:req.scanAccess});
-  }catch(e){ console.error('File inspection failed:',e.message);res.status(e.statusCode||422).json({error:'File inspection could not complete.',detail:e.message,status:'failed'}); }
+    return {...result,aiAnalysis,multimodal,deepForensics,groundTruth:exactGroundTruth,perceptualGroundTruth};
+}
+
+async function respondWithAnalysis(req,res,file){
+  const limitMb=plans.find(p=>p.id===(req.scanAccess?.plan||'free'))?.maxMb||15;
+  if(file.size>limitMb*1024*1024)return res.status(413).json({error:`Your ${req.scanAccess?.plan||'free'} plan accepts files up to ${limitMb} MB.`});
+  try{
+    const result=await analyzeUploadedFile(file);
+    await persistScan(req.authUser,file,result).catch(e=>console.error('Scan history save failed:',e.message));
+    res.json({...result,access:req.scanAccess});
+  }catch(e){console.error('File inspection failed:',e.message);res.status(e.statusCode||422).json({error:'File inspection could not complete.',detail:e.message,status:'failed'});}
+}
+
+app.post('/api/analyze',requireScanAccess,upload.single('file'),async(req,res)=>respondWithAnalysis(req,res,req.file));
+
+app.post('/api/analyze-storage',requireScanAccess,async(req,res)=>{
+  const objectPath=safeStoragePath(req.authUser.id,req.body?.path);
+  if(!objectPath)return res.status(400).json({error:'Invalid private upload path.'});
+  try{
+    const file=await downloadPrivateUpload(req.authUser.id,req.authToken,objectPath,req.body?.originalName,req.body?.mimeType);
+    await deletePrivateUpload(req.authToken,objectPath);
+    return respondWithAnalysis(req,res,file);
+  }catch(e){
+    await deletePrivateUpload(req.authToken,objectPath);
+    return res.status(e.statusCode||422).json({error:'The private upload could not be processed.',detail:e.message,status:'failed'});
+  }
 });
 app.post('/api/analyze-text', requireScanAccess, async (req,res)=>{
   try{
@@ -143,17 +263,40 @@ app.post('/api/analyze-text', requireScanAccess, async (req,res)=>{
     res.json({...base,aiAnalysis,multimodal:{kind:'text',status:'not_applicable',reason:'Text-only input has no image, audio, video or document-container layer.'},access:req.scanAccess});
   }catch(e){console.error('Text inspection failed:',e.message);res.status(e.statusCode||422).json({error:'Text inspection could not complete.',detail:e.message,status:'failed'});}
 });
-app.post('/api/create-checkout-session', async (req,res)=>{
+app.post('/api/create-checkout-session',requireUser,async(req,res)=>{
   try{
     const plan=String(req.body?.plan||'').toLowerCase(),price=priceIds[plan];
     if(!['lite','pro','business'].includes(plan))return res.status(400).json({error:'Unknown plan.'});
-    if(!process.env.STRIPE_SECRET_KEY||!price)return res.status(503).json({error:'Billing is not connected yet.'});
+    if(!process.env.STRIPE_SECRET_KEY||!process.env.STRIPE_WEBHOOK_SECRET||!serviceRoleConfigured()||!price)return res.status(503).json({error:'Billing is not connected yet.'});
     const stripe=new Stripe(process.env.STRIPE_SECRET_KEY),base=`${req.headers['x-forwarded-proto']||req.protocol}://${req.get('host')}`;
-    const params={mode:'subscription',line_items:[{price,quantity:1}],success_url:`${base}/account.html?checkout=success&session_id={CHECKOUT_SESSION_ID}`,cancel_url:`${base}/pricing.html?checkout=cancelled`,allow_promotion_codes:true};
-    const email=String(req.body?.email||'').trim();if(/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))params.customer_email=email;
-    const userId=String(req.body?.userId||'').trim();if(userId)params.client_reference_id=userId.slice(0,200);
+    const rows=await supabaseAdmin(`/rest/v1/profiles?id=eq.${encodeURIComponent(req.authUser.id)}&select=stripe_customer_id&limit=1`);
+    let customerId=rows?.[0]?.stripe_customer_id||null;
+    if(!customerId){
+      const customer=await stripe.customers.create({email:req.authUser.email||undefined,metadata:{supabase_user_id:req.authUser.id}});
+      customerId=customer.id;
+      await supabaseAdmin(`/rest/v1/profiles?id=eq.${encodeURIComponent(req.authUser.id)}`,{method:'PATCH',body:{stripe_customer_id:customerId,updated_at:new Date().toISOString()},headers:{prefer:'return=minimal'}});
+    }
+    const params={
+      mode:'subscription',customer:customerId,line_items:[{price,quantity:1}],
+      success_url:`${base}/account.html?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url:`${base}/pricing.html?checkout=cancelled`,allow_promotion_codes:true,
+      client_reference_id:req.authUser.id,
+      metadata:{supabase_user_id:req.authUser.id,plan,price_id:price},
+      subscription_data:{metadata:{supabase_user_id:req.authUser.id,plan,price_id:price}}
+    };
     const session=await stripe.checkout.sessions.create(params);res.json({url:session.url});
   }catch(e){console.error(e);res.status(500).json({error:'Could not open checkout.',detail:e.message});}
+});
+app.post('/api/create-portal-session',requireUser,async(req,res)=>{
+  try{
+    if(!process.env.STRIPE_SECRET_KEY||!serviceRoleConfigured())return res.status(503).json({error:'Billing is not connected yet.'});
+    const rows=await supabaseAdmin(`/rest/v1/profiles?id=eq.${encodeURIComponent(req.authUser.id)}&select=stripe_customer_id&limit=1`);
+    const customerId=rows?.[0]?.stripe_customer_id;
+    if(!customerId)return res.status(404).json({error:'No billing account exists for this user yet.'});
+    const stripe=new Stripe(process.env.STRIPE_SECRET_KEY),base=`${req.headers['x-forwarded-proto']||req.protocol}://${req.get('host')}`;
+    const session=await stripe.billingPortal.sessions.create({customer:customerId,return_url:`${base}/account.html`});
+    res.json({url:session.url});
+  }catch(e){console.error('Billing portal failed:',e.message);res.status(500).json({error:'Could not open billing management.'});}
 });
 function htmlFor(file){
   const full=path.join(__dirname,file);if(!fs.existsSync(full))return null;
