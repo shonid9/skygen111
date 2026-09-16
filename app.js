@@ -503,16 +503,163 @@
     (function drift(t) { live.forEach(l => { const w = l.offsetWidth, h = l.offsetHeight, k = t / 1000; l.style.setProperty('--x', `${w / 2 + Math.sin(k * .6) * w * .38}px`); l.style.setProperty('--y', `${h / 2 + Math.cos(k * .45) * h * .32}px`); }); requestAnimationFrame(drift); })(0);
   }
 
-  /* ------------------------------------------------------- MOBILE MENU */
+  /* ------------------------------------------------------- MOBILE MENU
+     A bottom sheet built from the links already in .mobilePanel. Where the
+     Popover API exists the sheet lives in the top layer and inherits
+     light-dismiss, Escape and focus containment; otherwise it falls back to
+     class toggling with a plain backdrop element. The open/close motion and
+     the per-row stagger are CSS (see nav-mobile.css); this file only owns
+     state, the drag gesture and the scroll lock. */
   const btn = document.querySelector('.mobileBtn'), panel = document.querySelector('.mobilePanel');
-  if (btn && !btn.querySelector('span')) btn.innerHTML = '<span></span>';
-  let backdrop = document.querySelector('.menuBackdrop'); if (!backdrop) { backdrop = document.createElement('div'); backdrop.className = 'menuBackdrop'; body.appendChild(backdrop); }
-  const setMenu = open => { btn?.classList.toggle('open', open); panel?.classList.toggle('open', open); backdrop.classList.toggle('open', open); body.classList.toggle('menuOpen', open); nav?.classList.remove('hide'); btn?.setAttribute('aria-expanded', open ? 'true' : 'false'); if (innerWidth <= 760) body.style.overflow = open ? 'hidden' : ''; };
-  btn?.addEventListener('click', () => setMenu(!panel?.classList.contains('open')));
-  backdrop.addEventListener('click', () => setMenu(false));
-  addEventListener('keydown', e => { if (e.key === 'Escape') setMenu(false); });
-  panel?.querySelectorAll('a').forEach(a => a.addEventListener('click', () => setMenu(false)));
-  addEventListener('resize', () => { if (innerWidth > 760) setMenu(false); });
+  if (btn && panel) {
+    const MQ = matchMedia('(max-width: 760px)');
+    const nativePopover = typeof panel.togglePopover === 'function';
+
+    btn.innerHTML = '<i></i><i></i>';
+    btn.setAttribute('aria-label', 'Open menu');
+    btn.setAttribute('aria-expanded', 'false');
+    btn.type = 'button';
+
+    /* Build the sheet once, reusing the page's own link list. */
+    if (!panel.querySelector('.sheetNav')) {
+      /* On a phone this sheet is the whole site nav, so it lists every
+         destination regardless of what an individual page's markup carries
+         (pricing.html ships three links, account.html four). A page's own
+         wording wins where it has it; anything extra it defines is kept. */
+      const CANON = [['/verify.html', 'Verify anything'], ['/legal.html', 'Legal documents'],
+        ['/receipts.html', 'Receipts & invoices'], ['/fraud.html', 'Fraud & deception'],
+        ['/integrations.html', 'Integrations'], ['/how.html', 'How it works'],
+        ['/pricing.html', 'Pricing'], ['/account.html', 'Sign in']];
+      const own = new Map([...panel.querySelectorAll('a')].map(a => [a.getAttribute('href'), a.textContent.trim()]));
+      const here = location.pathname;
+      const links = CANON.map(([href, text]) => ({ href, text: own.get(href) || text, current: href === here }));
+      own.forEach((text, href) => { if (!CANON.some(([c]) => c === href)) links.push({ href, text, current: href === here }); });
+      /* The sheet's button is the conversion action, never a row that is
+         already in the list above it. On the verify page itself that means
+         jumping to the scanner instead of reloading the page. */
+      const onVerify = location.pathname === '/verify.html';
+      const ctaHref = onVerify ? '#scanner' : '/verify.html';
+      const ctaText = onVerify ? 'Run your free scan' : 'Start verification';
+      const esc = v => String(v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+      panel.innerHTML =
+        '<div class="sheetGrip" aria-hidden="true"><span></span></div>' +
+        '<div class="sheetHead">' +
+          '<a class="sheetBrand" href="/index.html">' +
+            '<img src="/logo-emet-one.png" alt="" width="42" height="32" decoding="async">' +
+            '<span class="t"><strong>EMET ONE</strong><small>VERIFICATION INTELLIGENCE</small></span>' +
+          '</a>' +
+          '<button class="sheetClose" type="button" aria-label="Close menu">✕</button>' +
+        '</div>' +
+        '<nav class="sheetNav" aria-label="Site">' +
+          links.map((l, i) =>
+            '<a href="' + esc(l.href) + '" style="--i:' + i + '"' + (l.current ? ' aria-current="page"' : '') + '>' +
+              '<span class="n">' + String(i + 1).padStart(2, '0') + '</span>' +
+              '<span class="l">' + esc(l.text) + '</span>' +
+              '<span class="c" aria-hidden="true">↗</span>' +
+            '</a>').join('') +
+        '</nav>' +
+        '<div class="sheetFoot">' +
+          '<a class="sheetCta" href="' + esc(ctaHref) + '">' + esc(ctaText) + ' <span aria-hidden="true">↗</span></a>' +
+          '<div class="sheetTag">EVIDENCE BEFORE CONCLUSIONS</div>' +
+        '</div>';
+    }
+
+    let backdrop = null;
+    if (nativePopover) {
+      panel.setAttribute('popover', 'auto');
+    } else {
+      backdrop = document.querySelector('.menuBackdrop');
+      if (!backdrop) { backdrop = document.createElement('div'); backdrop.className = 'menuBackdrop'; body.appendChild(backdrop); }
+      backdrop.addEventListener('click', () => setMenu(false));
+    }
+
+    const isOpen = () => nativePopover ? panel.matches(':popover-open') : panel.classList.contains('open');
+
+    /* Locking <html> keeps the scroll offset, so nothing jumps on close. */
+    const lock = on => document.documentElement.classList.toggle('menuLock', on);
+
+    const sync = open => {
+      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+      btn.setAttribute('aria-label', open ? 'Close menu' : 'Open menu');
+      body.classList.toggle('menuOpen', open);
+      backdrop?.classList.toggle('open', open);
+      if (open) nav?.classList.remove('hide');
+      lock(open);
+      if (!open) { panel.style.transform = ''; panel.classList.remove('dragging'); }
+    };
+
+    const setMenu = open => {
+      if (open === isOpen()) return;
+      if (nativePopover) { open ? panel.showPopover() : panel.hidePopover(); return; }
+      panel.classList.toggle('open', open);
+      sync(open);
+    };
+
+    if (nativePopover) {
+      /* toggle fires for light-dismiss and Escape too, so state stays honest. */
+      panel.addEventListener('toggle', e => {
+        const open = e.newState === 'open';
+        sync(open);
+        if (open) panel.querySelector('.sheetNav a')?.focus({ preventScroll: true });
+        else btn.focus({ preventScroll: true });
+      });
+    }
+
+    btn.addEventListener('click', () => setMenu(!isOpen()));
+    panel.querySelector('.sheetClose')?.addEventListener('click', () => setMenu(false));
+    panel.querySelectorAll('a').forEach(a => a.addEventListener('click', () => setMenu(false)));
+    if (!nativePopover) addEventListener('keydown', e => { if (e.key === 'Escape') setMenu(false); });
+    MQ.addEventListener('change', e => { if (!e.matches) setMenu(false); });
+
+    /* ------------------------------------------------- DRAG TO DISMISS
+       Grip and header drag the sheet down; release past a quarter of its
+       height, or fast enough, dismisses. Otherwise it springs back. */
+    if (!reduced) {
+      const handles = [panel.querySelector('.sheetGrip'), panel.querySelector('.sheetHead')].filter(Boolean);
+      let id = null, y0 = 0, t0 = 0, dy = 0, h = 0, moved = 0;
+      panel.querySelector('.sheetBrand')?.addEventListener('click', e => { if (moved > 6) e.preventDefault(); });
+
+      const end = () => {
+        if (id === null) return;
+        const wasDragging = panel.classList.contains('dragging');
+        id = null;
+        panel.classList.remove('dragging');
+        if (!wasDragging) { dy = 0; return; }
+        const v = dy / Math.max(1, performance.now() - t0);
+        if (dy > h * .25 || v > .55) {
+          panel.animate([{ transform: `translateY(${dy}px)` }, { transform: 'translateY(101%)' }],
+            { duration: 220, easing: 'cubic-bezier(.3,0,.8,.15)' }).finished.then(() => setMenu(false), () => setMenu(false));
+        } else {
+          panel.style.transform = '';
+          panel.animate([{ transform: `translateY(${dy}px)` }, { transform: 'none' }],
+            { duration: 520, easing: 'cubic-bezier(.2,.8,.2,1)' });
+        }
+        dy = 0;
+      };
+
+      handles.forEach(el => {
+        el.addEventListener('pointerdown', e => {
+          if (id !== null || !isOpen() || e.target.closest('.sheetClose')) return;
+          id = e.pointerId; y0 = e.clientY; t0 = performance.now(); dy = 0; moved = 0;
+          h = panel.getBoundingClientRect().height;
+        });
+        el.addEventListener('pointermove', e => {
+          if (e.pointerId !== id) return;
+          moved = Math.abs(e.clientY - y0);
+          /* Capture only once this is clearly a drag: capturing on pointerdown
+             retargets the click and would stop the brand link activating. */
+          if (moved <= 4) return;
+          if (!panel.classList.contains('dragging')) { panel.classList.add('dragging'); el.setPointerCapture?.(id); }
+          dy = Math.max(0, e.clientY - y0);
+          /* resist over-drag so the sheet feels attached to the finger */
+          panel.style.transform = `translateY(${dy > h ? h + (dy - h) * .2 : dy}px)`;
+        });
+        el.addEventListener('pointerup', e => { if (e.pointerId === id) end(); });
+        el.addEventListener('pointercancel', e => { if (e.pointerId === id) end(); });
+      });
+    }
+  }
 
   /* --------------------------------------------------- PAGE TRANSITION
      Cross-document View Transitions where supported; a clip-path veil elsewhere. */

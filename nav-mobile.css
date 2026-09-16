@@ -1,0 +1,416 @@
+/* ------------------------------------------------------------------
+   EMET ONE / mobile navigation sheet + scroll behaviour
+   Owns .mobileBtn, .mobilePanel and the nav scroll indicator.
+   The sheet is a native popover, so it renders in the top layer and
+   gets light-dismiss, Escape and focus containment from the platform.
+------------------------------------------------------------------- */
+
+:root {
+  --navh: 72px;
+  --sheet-ease: var(--ease);
+  --sheet-spring: var(--spring);
+}
+
+/* Anchor jumps used to land under the sticky nav. */
+html {
+  scroll-padding-top: calc(var(--navh) + 18px);
+}
+
+/* Scroll position rendered by the compositor, not by a scroll listener.
+   Fixed to the viewport rather than parented to .nav, so it survives the
+   nav's hide-on-scroll transform and stays readable the whole way down. */
+@supports (animation-timeline: scroll()) {
+  body:before {
+    content: "";
+    position: fixed;
+    left: 0;
+    right: 0;
+    top: 0;
+    height: 2px;
+    z-index: 95;
+    pointer-events: none;
+    transform: scaleX(0);
+    transform-origin: 0 50%;
+    background: linear-gradient(90deg, var(--blue), #6a5cff);
+    animation: e1ScrollProgress linear both;
+    animation-timeline: scroll(root block);
+  }
+  @keyframes e1ScrollProgress {
+    to { transform: scaleX(1); }
+  }
+}
+
+/* Desktop: no trigger, no sheet. Declared before the mobile block so the
+   mobile rules win the cascade rather than being overridden by source order. */
+.mobileBtn { display: none; }
+.mobilePanel { display: none; }
+.menuBackdrop { display: none; }
+
+@media (max-width: 760px) {
+  :root { --navh: 66px; }
+
+  /* ---------------------------------------------------- TRIGGER */
+  .mobileBtn {
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    border: 1px solid var(--line);
+    border-radius: 15px;
+    background: rgba(255, 255, 255, .72);
+    backdrop-filter: blur(12px) saturate(140%);
+    font-size: 0;
+    position: relative;
+    z-index: 92;
+    -webkit-tap-highlight-color: transparent;
+    transition: transform .4s var(--sheet-spring), background .3s var(--sheet-ease);
+  }
+  .mobileBtn:active { transform: scale(.93); }
+
+  .mobileBtn i {
+    position: absolute;
+    width: 17px;
+    height: 1.6px;
+    border-radius: 4px;
+    background: var(--ink);
+    transition: transform .46s var(--sheet-spring), opacity .2s var(--sheet-ease), width .4s var(--sheet-spring);
+  }
+  .mobileBtn i:nth-child(1) { transform: translateY(-5.5px); }
+  .mobileBtn i:nth-child(2) { width: 11px; transform: translate(3px, 5.5px); }
+
+  .mobileBtn[aria-expanded="true"] { background: var(--ink); }
+  .mobileBtn[aria-expanded="true"] i { background: #fff; width: 17px; }
+  .mobileBtn[aria-expanded="true"] i:nth-child(1) { transform: rotate(45deg); }
+  .mobileBtn[aria-expanded="true"] i:nth-child(2) { transform: rotate(-45deg); }
+
+  /* ------------------------------------------------------ SHEET */
+  .mobilePanel {
+    /* reset the popover UA box */
+    position: fixed;
+    inset: auto 0 0 0;
+    width: 100%;
+    max-width: 100%;
+    max-height: 100%;
+    margin: 0;
+    border: 0;
+    padding: 0;
+    overflow: visible;
+    color: var(--ink);
+
+    display: none;
+    flex-direction: column;
+    max-height: min(90dvh, 780px);
+    border-radius: 30px 30px 0 0;
+    background: linear-gradient(180deg, rgba(255, 253, 248, .97), rgba(246, 243, 236, .97));
+    box-shadow: 0 -1px 0 rgba(255, 255, 255, .8) inset,
+                0 -34px 90px rgba(17, 17, 17, .28);
+    backdrop-filter: blur(26px) saturate(150%);
+
+    transform: translateY(101%);
+    transition:
+      transform .6s var(--sheet-spring),
+      display .6s allow-discrete,
+      overlay .6s allow-discrete;
+  }
+  .mobilePanel:popover-open { display: flex; transform: none; }
+  @starting-style {
+    .mobilePanel:popover-open { transform: translateY(101%); }
+  }
+
+  /* hairline top edge that catches the light */
+  .mobilePanel:before {
+    content: "";
+    position: absolute;
+    left: 24px;
+    right: 24px;
+    top: 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(47, 91, 255, .5), rgba(123, 77, 255, .4), transparent);
+  }
+
+  .mobilePanel::backdrop {
+    background: rgba(12, 11, 9, .34);
+    backdrop-filter: blur(16px) saturate(120%);
+    opacity: 0;
+    transition:
+      opacity .46s var(--sheet-ease),
+      display .46s allow-discrete,
+      overlay .46s allow-discrete;
+  }
+  .mobilePanel:popover-open::backdrop { opacity: 1; }
+  @starting-style {
+    .mobilePanel:popover-open::backdrop { opacity: 0; }
+  }
+
+  /* dragging: follow the finger with no transition fighting it */
+  .mobilePanel.dragging { transition: none; }
+
+  /* ----------------------------------------------------- GRIP */
+  .sheetGrip {
+    flex: 0 0 auto;
+    display: grid;
+    place-items: center;
+    height: 26px;
+    margin-top: 6px;
+    touch-action: none;
+    cursor: grab;
+  }
+  .sheetGrip span {
+    width: 42px;
+    height: 4px;
+    border-radius: 99px;
+    background: rgba(17, 17, 17, .18);
+    transition: width .4s var(--sheet-spring), background .3s var(--sheet-ease);
+  }
+  .mobilePanel.dragging .sheetGrip span { width: 58px; background: rgba(17, 17, 17, .3); }
+
+  /* --------------------------------------------------- HEADER */
+  .sheetHead {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    padding: 2px 20px 14px;
+    touch-action: none;
+  }
+  .sheetBrand {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    border-radius: 12px;
+    -webkit-tap-highlight-color: transparent;
+    transition: transform .34s var(--sheet-spring);
+  }
+  .sheetBrand:active { transform: scale(.97); }
+  .sheetHead img { width: 42px; height: 32px; object-fit: contain; flex: 0 0 42px; }
+  .sheetHead .t { display: block; line-height: 1; }
+  .sheetHead strong { display: block; font-size: 15px; letter-spacing: -.045em; }
+  .sheetHead small {
+    display: block;
+    margin-top: 4px;
+    font: 500 7.5px/1 "IBM Plex Mono", monospace;
+    letter-spacing: .105em;
+    color: var(--muted);
+  }
+  .sheetClose {
+    margin-left: auto;
+    width: 36px;
+    height: 36px;
+    display: grid;
+    place-items: center;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: rgba(255, 255, 255, .6);
+    font: 500 15px/1 Inter, sans-serif;
+    color: var(--muted);
+    -webkit-tap-highlight-color: transparent;
+    transition: transform .34s var(--sheet-spring), color .2s;
+  }
+  .sheetClose:active { transform: scale(.9); color: var(--ink); }
+
+  /* ----------------------------------------------------- LINKS */
+  .sheetNav {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    padding: 0 12px;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(17, 17, 17, .22) transparent;
+    /* fade the list where it runs under the CTA */
+    mask-image: linear-gradient(180deg, transparent 0, #000 14px, #000 calc(100% - 10px), transparent 100%);
+  }
+
+  .sheetNav a {
+    --d: calc(var(--i) * 30ms + 60ms);
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    min-height: 60px;
+    padding: 0 12px;
+    border-radius: 16px;
+    font-size: 21px;
+    letter-spacing: -.035em;
+    -webkit-tap-highlight-color: transparent;
+  }
+  /* Keyframes, not transitions: a popover's children enter the rendering
+     tree with no previous style, so there is nothing to transition from. */
+  .mobilePanel:popover-open .sheetNav a,
+  .mobilePanel.open .sheetNav a {
+    animation: e1Row .52s var(--sheet-spring) var(--d) both;
+  }
+  @keyframes e1Row {
+    from { opacity: 0; transform: translateY(22px); filter: blur(6px); }
+    to { opacity: 1; transform: none; filter: none; }
+  }
+
+  /* hairline that draws in under each row */
+  .sheetNav a + a:before {
+    content: "";
+    position: absolute;
+    left: 12px;
+    right: 12px;
+    top: 0;
+    height: 1px;
+    background: var(--line);
+    transform-origin: 0 50%;
+  }
+  .mobilePanel:popover-open .sheetNav a + a:before,
+  .mobilePanel.open .sheetNav a + a:before {
+    animation: e1Line .46s var(--sheet-ease) var(--d) both;
+  }
+  @keyframes e1Line {
+    from { transform: scaleX(0); }
+    to { transform: scaleX(1); }
+  }
+
+  .sheetNav .n {
+    flex: 0 0 auto;
+    font: 500 10px/1 "IBM Plex Mono", monospace;
+    letter-spacing: .08em;
+    color: #9b958c;
+    transition: color .3s var(--sheet-ease);
+  }
+  .sheetNav .l { flex: 1 1 auto; }
+  .sheetNav .c {
+    flex: 0 0 auto;
+    font: 500 13px/1 "IBM Plex Mono", monospace;
+    color: #b3ada3;
+    transition: transform .4s var(--sheet-spring), color .3s;
+  }
+
+  .sheetNav a:active {
+    background: rgba(47, 91, 255, .07);
+  }
+  .sheetNav a:active .c { transform: translate(4px, -4px); color: var(--blue); }
+
+  .sheetNav a[aria-current] { font-weight: 600; }
+  .sheetNav a[aria-current] .n { color: var(--blue); }
+  .sheetNav a[aria-current]:after {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 50%;
+    width: 4px;
+    height: 20px;
+    margin-top: -10px;
+    border-radius: 0 4px 4px 0;
+    background: var(--blue);
+  }
+
+  /* ------------------------------------------------------- CTA */
+  .sheetFoot {
+    flex: 0 0 auto;
+    display: grid;
+    gap: 12px;
+    padding: 14px 20px calc(18px + env(safe-area-inset-bottom));
+    border-top: 1px solid var(--line);
+    background: linear-gradient(180deg, rgba(246, 243, 236, 0), rgba(246, 243, 236, .9));
+  }
+  .mobilePanel:popover-open .sheetFoot,
+  .mobilePanel.open .sheetFoot {
+    animation: e1Foot .5s var(--sheet-spring) .18s both;
+  }
+  @keyframes e1Foot {
+    from { opacity: 0; transform: translateY(16px); }
+    to { opacity: 1; transform: none; }
+  }
+
+  .sheetCta {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-height: 56px;
+    border-radius: 18px;
+    background: var(--ink);
+    color: #fff;
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: -.02em;
+    overflow: hidden;
+    -webkit-tap-highlight-color: transparent;
+    transition: transform .34s var(--sheet-spring);
+  }
+  .sheetCta:active { transform: scale(.975); }
+  /* light sweeps across the button as the sheet settles */
+  .sheetCta:before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(105deg, transparent 32%, rgba(255, 255, 255, .22) 48%, transparent 64%);
+    transform: translateX(-120%);
+  }
+  .mobilePanel:popover-open .sheetCta:before {
+    animation: e1Sweep 1.1s var(--sheet-ease) .42s both;
+  }
+  @keyframes e1Sweep {
+    to { transform: translateX(120%); }
+  }
+
+  .sheetTag {
+    text-align: center;
+    font: 500 8px/1 "IBM Plex Mono", monospace;
+    letter-spacing: .14em;
+    color: var(--muted);
+  }
+
+  /* the page must not scroll behind the sheet */
+  html.menuLock, html.menuLock body { overflow: hidden; }
+}
+
+/* Wider phones and small tablets keep the sheet but relax the type. */
+@media (max-width: 760px) and (min-width: 560px) {
+  .mobilePanel {
+    inset: auto 0 0 0;
+    margin: 0 auto;
+    max-width: 520px;
+    border-radius: 30px 30px 0 0;
+  }
+}
+
+/* Landscape phones: short viewport, tighten everything. */
+@media (max-width: 760px) and (max-height: 520px) {
+  .mobilePanel { max-height: 94dvh; }
+  .sheetNav a { min-height: 48px; font-size: 18px; }
+  .sheetHead { padding-bottom: 10px; }
+  .sheetCta { min-height: 48px; }
+}
+
+/* No-popover fallback: class-driven, same look. */
+@media (max-width: 760px) {
+  .mobilePanel.open { display: flex; transform: none; }
+  .menuBackdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 79;
+    background: rgba(12, 11, 9, .34);
+    backdrop-filter: blur(16px) saturate(120%);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .42s var(--sheet-ease);
+  }
+  .mobilePanel.open ~ .menuBackdrop, .menuBackdrop.open { opacity: 1; pointer-events: auto; }
+  .mobilePanel:not([popover]) { z-index: 80; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mobilePanel,
+  .mobilePanel::backdrop,
+  .mobilePanel .sheetNav a,
+  .mobileBtn i,
+  .sheetGrip span { transition-duration: .01ms !important; transition-delay: 0s !important; }
+  .mobilePanel { transform: none; }
+  .mobilePanel .sheetNav a,
+  .mobilePanel .sheetNav a + a:before,
+  .mobilePanel .sheetFoot { animation: none !important; filter: none; transform: none; opacity: 1; }
+  .mobilePanel:popover-open .sheetCta:before { animation: none; }
+  @supports (animation-timeline: scroll()) {
+    body:before { animation: none; transform: scaleX(0); }
+  }
+}
