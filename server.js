@@ -13,6 +13,8 @@ const { analyzeMultimodal } = require('./multimodal-engine');
 const { analyzeAdvancedImage } = require('./advanced-image-forensics');
 const { analyzeDeepContainer } = require('./deep-container-forensics');
 const { matchPerceptualGroundTruth } = require('./image-perceptual-ground-truth');
+const { cohortStatus } = require('./hebrew-analysis');
+const { saveScanMemory, memoryMetadata } = require('./scan-memory');
 const { installAdminApi } = require('./admin-api');
 const { requireUser, requireScanAccess, accountStatus } = require('./access-control');
 const app = express();
@@ -45,8 +47,8 @@ async function supabaseAdmin(pathname,{method='GET',body,headers={}}={}){
   return text?JSON.parse(text):null;
 }
 
-async function persistScan(user,file,result){
-  if(!user?.id||!process.env.SUPABASE_URL||!process.env.SUPABASE_SERVICE_ROLE_KEY)return;
+async function persistScan(user,file,result,token){
+  if(!user?.id)return {status:'not_configured'};
   const row={
     user_id:user.id,
     filename:file.originalname,
@@ -58,9 +60,9 @@ async function persistScan(user,file,result){
     ai_style_score:Number(result?.aiAnalysis?.local?.ensemble?.score??result?.aiAnalysis?.local?.style?.localScore??0)||null,
     summary:result?.summary||{},
     findings:Array.isArray(result?.findings)?result.findings:[],
-    metadata:result?.metadata||{}
+    metadata:memoryMetadata(result)
   };
-  await supabaseAdmin('/rest/v1/scans',{method:'POST',body:row,headers:{prefer:'return=minimal'}});
+  return saveScanMemory(row,token);
 }
 
 function safeStoragePath(userId,objectPath){
@@ -155,10 +157,10 @@ function applyExactGroundTruth(aiAnalysis,match){
 }
 
 app.use('/api',(req,res,next)=>{res.setHeader('Cache-Control','no-store');next()});
-app.get('/api/health',(req,res)=>res.json({ok:true,service:'emet-one',version:'0.9.5',engine:VERSION,fingerprint:'EMET-FINGERPRINT-LAB-2026.09.12',authorshipMap:'EMET-AI-ORIGIN-MAP-2026.09.12.2',groundTruth:'EMET-GT-EXACT+PERCEPTUAL-2026.09.13',adminLab:'EMET-LAB-2026.09.12',multimodal:'EMET-MULTIMODAL-2026.09.13',imageMap:'EMET-IMAGE-MAP-2026.09.13',visionFusion:'EMET-VISION-FUSION-2026.09.13.3',deepLineage:'EMET-DEEP-LINEAGE-2026.09.13',accessControl:'ACCOUNT-BOUND-SCAN-ENTITLEMENTS-2026.09.13'}));
+app.get('/api/health',(req,res)=>res.json({ok:true,service:'emet-one',version:'0.10.0',hebrewAnalysis:'EMET-HEBREW-CONTEXT-2026.10.03',hebrewCohort:cohortStatus(),engine:VERSION,fingerprint:'EMET-FINGERPRINT-LAB-2026.09.12',authorshipMap:'EMET-AI-ORIGIN-MAP-2026.10.03',groundTruth:'EMET-GT-EXACT+PERCEPTUAL-2026.09.13',adminLab:'EMET-LAB-2026.09.12',multimodal:'EMET-MULTIMODAL-2026.09.13',imageMap:'EMET-IMAGE-MAP-2026.09.13',visionFusion:'EMET-VISION-FUSION-2026.09.13.3',deepLineage:'EMET-DEEP-LINEAGE-2026.09.13',accessControl:'ACCOUNT-BOUND-SCAN-ENTITLEMENTS-2026.09.13'}));
 app.get('/api/engine',(req,res)=>res.json({
   engine:VERSION,
-  textClassifier:{status:'not_configured',trained:false,validatedLanguages:[],calibratedProbabilityAvailable:false},
+  textClassifier:cohortStatus(),
   localPanels:['Unicode word segmentation','contextual AI disclosures','assistant phrase locations','DOCX visible text mapping','DOCX run fingerprint','220–440 word authorship context windows','exact labeled-file SHA-256 recognition','perceptual image ground-truth lineage matching'],
   forensicLayers:['OOXML metadata','tracked revisions','C2PA SDK validation states','PDF signature inspection','EXIF/XMP','pixel statistics','OCR','audio waveform baseline','video frame sampling','image forensic attention map','multi-scale image residual fusion','camera-capture evidence','regional image localization','JPEG marker and quantization-table inspection','PNG chunk history','OOXML package timestamp lineage','Word paraId/textId/session lineage','revision author/date graph','embedded object and external relationship inventory','aHash+dHash near-duplicate lineage recognition'],
   localBinaries:['tesseract','ffmpeg','ffprobe','pdfinfo','pdfsig','pdftotext','pdftoppm','qpdf'],
@@ -170,12 +172,14 @@ app.get('/api/config',(req,res)=>res.json({
   supabaseUrl:process.env.SUPABASE_URL||null,supabasePublishableKey:process.env.SUPABASE_PUBLISHABLE_KEY||null,
   billingConfigured:Boolean(process.env.STRIPE_SECRET_KEY&&process.env.STRIPE_WEBHOOK_SECRET&&serviceRoleConfigured()&&Object.values(priceIds).every(Boolean)),
   detectionProviders:{c2pa:true,localUltimateEnsemble:true,localFingerprintLab:true,localMultimodal:true,privateGroundTruth:true,perceptualGroundTruth:true,imageAttentionMap:true,visionFusion:true,deepContainerForensics:true},
-  textClassifier:{status:'not_configured',trained:false},freeScans:1,maxUploadMb:15,freeScanRequiresAccount:true
+  textClassifier:cohortStatus(),profileMemoryConfigured:Boolean(process.env.SUPABASE_URL&&process.env.SUPABASE_PUBLISHABLE_KEY),freeScans:1,maxUploadMb:15,freeScanRequiresAccount:true
 }));
 app.get('/api/account',requireUser,async(req,res)=>{try{res.json({user:{id:req.authUser.id,email:req.authUser.email},access:await accountStatus(req.authToken)})}catch(e){res.status(503).json({error:'Could not load account status.'})}});
 app.get('/api/scans',requireUser,async(req,res)=>{
   try{
-    const rows=await supabaseAdmin(`/rest/v1/scans?user_id=eq.${encodeURIComponent(req.authUser.id)}&select=id,filename,mime_type,size_bytes,risk_score,engine,created_at&order=created_at.desc&limit=25`);
+    const response=await fetch(`${process.env.SUPABASE_URL}/rest/v1/scans?user_id=eq.${encodeURIComponent(req.authUser.id)}&select=id,filename,mime_type,size_bytes,risk_score,engine,created_at,metadata&order=created_at.desc&limit=25`,{headers:{apikey:process.env.SUPABASE_PUBLISHABLE_KEY,authorization:`Bearer ${req.authToken}`},signal:AbortSignal.timeout(10000)});
+    if(!response.ok)throw new Error('Scan history request failed.');
+    const rows=await response.json();
     res.json({scans:Array.isArray(rows)?rows:[]});
   }catch(e){console.error('Scan history load failed:',e.message);res.status(503).json({error:'Could not load scan history.'});}
 });
@@ -236,7 +240,7 @@ async function respondWithAnalysis(req,res,file){
   if(file.size>limitMb*1024*1024)return res.status(413).json({error:`Your ${req.scanAccess?.plan||'free'} plan accepts files up to ${limitMb} MB.`});
   try{
     const result=await analyzeUploadedFile(file);
-    await persistScan(req.authUser,file,result).catch(e=>console.error('Scan history save failed:',e.message));
+    result.profileMemory=await persistScan(req.authUser,file,result,req.authToken).catch(e=>{console.error('Scan history save failed:',e.message);return {status:'failed'};});
     res.json({...result,access:req.scanAccess});
   }catch(e){console.error('File inspection failed:',e.message);res.status(e.statusCode||422).json({error:'File inspection could not complete.',detail:e.message,status:'failed'});}
 }
@@ -260,7 +264,9 @@ app.post('/api/analyze-text', requireScanAccess, async (req,res)=>{
     const text=String(req.body?.text||'');if(text.trim().length<30)return res.status(400).json({error:'Paste at least 30 characters.'});
     if(text.length>250000)return res.status(413).json({error:'Text sample is too large for the demo.'});
     const [base,aiAnalysis]=await Promise.all([Promise.resolve(analyzeTextInput(text)),analyzeAIText(text)]);
-    res.json({...base,aiAnalysis,multimodal:{kind:'text',status:'not_applicable',reason:'Text-only input has no image, audio, video or document-container layer.'},access:req.scanAccess});
+    const result={...base,aiAnalysis};
+    result.profileMemory=await persistScan(req.authUser,{originalname:'Text sample',mimetype:'text/plain',size:Buffer.byteLength(text),buffer:Buffer.from(text)},result,req.authToken).catch(e=>{console.error('Text profile save failed:',e.message);return {status:'failed'};});
+    res.json({...result,multimodal:{kind:'text',status:'not_applicable',reason:'Text-only input has no image, audio, video or document-container layer.'},access:req.scanAccess});
   }catch(e){console.error('Text inspection failed:',e.message);res.status(e.statusCode||422).json({error:'Text inspection could not complete.',detail:e.message,status:'failed'});}
 });
 app.post('/api/create-checkout-session',requireUser,async(req,res)=>{
