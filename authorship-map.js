@@ -1,4 +1,5 @@
 'use strict';
+const {academicContext}=require('./academic-context');
 const {readDocx}=require('./evidence-document');
 const {panelScores}=require('./ultimate-engine');
 
@@ -83,15 +84,17 @@ function buildAuthorshipMap(file,aiAnalysis,fingerprintLab){
   const process=aiAnalysis?.assessment?.process||null;
   const processScore=Number(process?.score||0);
   const strongProcess=process?.status==='strong_assembly_signal';
-  const documentStyle=panelScores(doc.text);
+  const context=academicContext(doc.text);
+  const bodyDoc={...doc,paragraphs:doc.paragraphs.map(p=>({...p,text:context.body.slice(p.startUTF16,p.endUTF16)}))};
+  const documentStyle=panelScores(context.body);
   const items=[];
 
   for(let i=0;i<doc.paragraphs.length;i++){
-    const p=doc.paragraphs[i],text=String(p.text||'').trim(),wc=words(text);
+    const p=doc.paragraphs[i],text=String(bodyDoc.paragraphs[i].text||'').trim(),wc=words(text);
     if(looksStructural(text))continue;
     const coords=paragraphCoordinates(doc,p);
     const local=panelScores(text);
-    const ctx=contextFor(doc,i);
+    const ctx=contextFor(bodyDoc,i);
     const contextStyle=panelScores(ctx.text);
     const fp=fingerprintStrength(p,fingerprintLab);
     const score=scoreParagraph({text,wc,local,context:contextStyle,documentStyle,process,editStrength:fp.strength});
@@ -138,11 +141,14 @@ function buildAuthorshipMap(file,aiAnalysis,fingerprintLab){
 
   return {
     supported:true,
-    version:'EMET-AI-ORIGIN-MAP-2026.09.12.2',
+    version:'EMET-AI-ORIGIN-MAP-2026.10.03',
+    contextPolicy:context.summary,
+    attributionStatus:'uncalibrated_diagnostics',
     method:'multi-scale local evidence fusion: DOCX process fingerprint + 220–440 word context windows + document stylometry + Word run fingerprints; not a calibrated probability',
     documentSignalScore,
     paragraphsMapped:items.length,
-    estimatedAIShare:weighted?Math.round(aiWords/weighted*100):0,
+    estimatedAIShare:null,
+    diagnosticHighSignalShare:weighted?Math.round(aiWords/weighted*100):0,
     strongFileProcessEvidence:strongProcess,
     processScore,
     fingerprintUsed:Boolean(fingerprintLab?.supported),

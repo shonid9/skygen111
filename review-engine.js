@@ -1,6 +1,8 @@
 'use strict';
 const path=require('node:path');
 const {VERSION,inspectText,assess}=require('./evidence-text');
+const {analyzeHebrew}=require('./hebrew-analysis');
+const {academicContext}=require('./academic-context');
 const {readDocx}=require('./evidence-document');
 const {readProvenance}=require('./provenance-reader');
 const {inspectDocumentProcess}=require('./document-process');
@@ -8,6 +10,8 @@ const {buildAuthorshipMap}=require('./authorship-map');
 const TEXT=new Set(['.txt','.md','.csv','.json','.xml','.html','.htm','.js','.ts','.tsx','.jsx','.py','.java','.c','.cpp','.cs','.go','.rs','.php','.rb','.sql','.sh','.yaml','.yml']);
 function resultFor(text,doc=null){
   const inspected=inspectText(text,doc?.paragraphs),assessment=assess(inspected);
+  assessment.hebrewAnalysis=analyzeHebrew(text);
+  if(assessment.hebrewAnalysis.status==='completed')assessment.checks.push({id:'hebrew_context',status:'completed'},{id:'hebrew_cohort',status:assessment.hebrewAnalysis.cohort.status});
   assessment.documentCoverage=doc?.coverage||null;
   assessment.discourseCount=inspected.discourse.count;
   assessment.metadata=doc?.metadata||{};
@@ -16,7 +20,8 @@ function resultFor(text,doc=null){
   return {version:VERSION,final:{verdict:assessment.ai.status==='self_reported'?'AI_USE_DISCLOSED':assessment.ai.status==='content_signal'?'AI_RESIDUE_FOUND':'CLASSIFIER_NOT_CONFIGURED',confidence:assessment.ai.status==='self_reported'?'self-reported':'not calibrated',canProve:false,reason:assessment.explanation.en,evidenceGrade:assessment.ai.status==='self_reported'?'document statement':'observations only'},assessment,providers:[],provenance:{c2pa:{status:doc?'unsupported':'not_applicable',manifestPresent:false,validationPassed:false}},local:{ensemble:{score:null,language:inspected.language.code,panels:{},metrics:{words:inspected.words,discourseMarkers:inspected.discourse.count}},style:{language:inspected.language.code,panels:{}},fileForensics:{...doc?.metadata,trackedRevisionMarkers:doc?.revisions?.length??0,hiddenTextProperties:doc?.hiddenTextCount??0,processScore:null},manipulation:{}},segments:{local:[]},coverage:inspected.coverage,limitations:['The AI origin map is evidence fusion, not mathematical proof of who typed every word.','A declaration is a document statement, not independently verified authorship.','Absence of retained edits is not evidence of AI creation.']};
 }
 function diagnostics(r,text){
-  const old=require('./ultimate-engine').panelScores(text);
+  const body=academicContext(text).body;
+  const old=require('./ultimate-engine').panelScores(body);
   const discourse=r.assessment.wordCount?Math.min(100,Math.round((r.assessment.discourseCount||0)/r.assessment.wordCount*1000)):0;
   old.panels.discourse=discourse;
   r.diagnostics={status:'uncalibrated',legacyVersion:'EMET-AI-ULTIMATE-2026.09.12',...old};
@@ -64,7 +69,9 @@ async function analyzeAIFile(file){
     r.provenance.c2pa=await readProvenance(file);
     r.assessment.provenance=r.provenance.c2pa;
     r.assessment.checks.unshift({id:'pdf_text',status:pdf.text?.trim()?'completed':'not_available'});
-    r.assessment.documentCoverage={pages:pdf.numpages,scope:'PDF extracted text. Scanned-page OCR is reported separately in media findings.'};
+    r.assessment.hebrewAnalysis=analyzeHebrew(text);
+  if(assessment.hebrewAnalysis.status==='completed')assessment.checks.push({id:'hebrew_context',status:'completed'},{id:'hebrew_cohort',status:assessment.hebrewAnalysis.cohort.status});
+  assessment.documentCoverage={pages:pdf.numpages,scope:'PDF extracted text. Scanned-page OCR is reported separately in media findings.'};
     return sourceClaim(r);
   }
   const r=resultFor('');r.assessment.ai.status='not_assessed';
